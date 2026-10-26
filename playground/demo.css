@@ -1,0 +1,16 @@
+@import 'tailwindcss';
+@import '../src/styles.css';
+
+body {
+  margin: 0;
+  background-color: #f8f9fc;
+  color: #0b1c30;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-code-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-feature-settings: 'tnum' 1;
+}
