@@ -1,6 +1,20 @@
 # react-bitable
 
+[![CI](https://github.com/DragonLuffy9527/react-bitable/actions/workflows/ci.yml/badge.svg)](https://github.com/DragonLuffy9527/react-bitable/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-005BAC.svg)](LICENSE)
+
 > A Feishu-Bitable-like multi-dimensional table for React. One dataset, six views, no backend.
+
+![Grid view](docs/screenshots/grid.png)
+
+| Kanban | Gantt |
+| --- | --- |
+| ![Kanban](docs/screenshots/kanban.png) | ![Gantt](docs/screenshots/gantt.png) |
+
+| Gallery | Calendar / Form |
+| --- | --- |
+| ![Gallery](docs/screenshots/gallery.png) | run `npm run dev` |
+
 
 `react-bitable` is a client-side multi-view table engine: a single `useBitable` hook owns state and
 persistence, and a set of controlled components render it. Field configuration, filtering, sorting,

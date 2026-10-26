@@ -1,6 +1,21 @@
 # react-bitable
 
+[![CI](https://github.com/DragonLuffy9527/react-bitable/actions/workflows/ci.yml/badge.svg)](https://github.com/DragonLuffy9527/react-bitable/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-005BAC.svg)](LICENSE)
+[![React 18+](https://img.shields.io/badge/react-18%20%7C%2019-005BAC.svg)](package.json)
+
 > 类飞书多维表格的 React 组件库。一份数据，六种视图，零后端。
+
+![表格视图](docs/screenshots/grid.png)
+
+| 看板视图 | 甘特视图 |
+| --- | --- |
+| ![看板](docs/screenshots/kanban.png) | ![甘特](docs/screenshots/gantt.png) |
+
+| 画册视图 | 日历 / 表单 |
+| --- | --- |
+| ![画册](docs/screenshots/gallery.png) | 见 `npm run dev` 的 playground |
+
 
 一个不依赖任何 UI 框架之外东西的 **多维表格引擎**：一个 `useBitable` hook 管状态与持久化，一套受控组件管渲染。
 字段配置、筛选、排序、多级分组、条件染色、行内编辑、父子记录、六种视图切换 —— 全部开箱可用，
