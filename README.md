@@ -33,9 +33,14 @@
 | 能力 | 说明 |
 | --- | --- |
 | 六种视图 | 表格 grid / 看板 kanban / 画册 gallery / 甘特 gantt / 日历 calendar / 表单 form，共用同一份视图配置 |
+| 视图可写 | 看板拖卡片改状态、日历拖事件改日期、甘特拖色条改期、表单提交写回，六种视图都能改数据 |
 | 字段配置 | 7 种字段类型、增删改、重命名、拖拽排序、调列宽、锁定（受控只读）、冻结列、视图级显隐 |
-| 筛选 / 排序 | AND / OR 多条件筛选，7 种操作符；多字段排序 |
+| 筛选 / 排序 | AND / OR 多条件筛选，**数字/日期列额外支持 大于 / 大于等于 / 小于 / 小于等于 / 介于**；多字段排序 |
 | 多级分组 | 飞书式嵌套分组，可逐级折叠、全部折叠 |
+| 分组汇总 | 组尾汇总行：求和 / 平均值 / 最大 / 最小 / 计数，按列配置，未分组时也能出底部合计 |
+| 区域选择 | 点选单元格、Shift+方向键框选矩形区域，**Ctrl/Cmd+C 复制为 TSV**，可直接粘进 Excel |
+| 行范围选择 | **Shift+点击行内任意位置选中连续多行**（锚点保持，可反复调整终点）；Ctrl/Cmd+点击切换单行 |
+| 键盘导航 | 方向键在单元格间移动，Esc 取消选区；正在编辑输入框时不抢键 |
 | 条件染色 | 单元格 / 整行染色，规则命中即生效，支持取色盘与业务色板 |
 | 行内编辑 | 单元格点开即改，回车保存、Esc 取消、Tab 走格 |
 | 父子记录 | 拖行首方块建立层级，父行可展开折叠 |
@@ -43,8 +48,100 @@
 | 撤销重做 | Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y，批量写入只记一步；勾选集也能一起回退 |
 | 拖拽填充 | 单元格右下角手柄下拉，Excel 式：数字递增、日期顺延、文本尾号递增 |
 | 批量更新 | `updateCells` 一次 `setData` 写多格，只产生一步撤销 |
+| 导入表格 | 上传 `.xlsx` / `.csv` / `.tsv`，自动识别字段类型与单选项，可逐列改类型后替换或追加 |
+| 导出表格 | 导出当前视图（已筛选 / 排序后的记录、仅可见列）为 **.xlsx** 或 **.csv**，自研最小 OOXML 打包，不引 SheetJS |
+| 虚拟滚动 | 平铺大表只渲染可视区附近的行（默认 >150 行触发），导入几万行也不卡 |
 | 持久化 | 数据、列、视图、当前视图、schema 版本全部落 `localStorage`，刷新不丢 |
 | SSR 安全 | 无 `localStorage` 环境自动降级为内存存储，不抛异常 |
+
+---
+
+## 视图交互
+
+六种视图不只是渲染，都能改数据。所有写操作都通过回调交还宿主，组件本身不持有业务状态。
+
+| 视图 | 交互 | 需要的配置 |
+| --- | --- | --- |
+| 表格 | 行内编辑、拖拽填充、拖拽换列、拖拽建父子记录、右键菜单 | `onUpdateCell` |
+| 看板 | **拖卡片到别的泳道改状态**（含空泳道，可拖入没有记录的状态） | `kanbanFieldId` + `onUpdateCell` |
+| 日历 | **拖事件条到别的日期格改日期**（保留原时间部分） | `calendarDateFieldId` + `onUpdateCell` |
+| 甘特 | **真实时间轴**：按月/日双行表头定位；**拖色条整体改期**、**拖右边缘改结束日** | `ganttStartFieldId` + `ganttEndFieldId` + `onUpdateCells` |
+| 画册 | 卡片浏览、点封面预览附件 | `galleryCoverFieldId` + `onOpenAttachment` |
+| 表单 | **提交后新增一条记录**，按字段类型转换值 | `onCreateRow` |
+
+几个实现上的约定：
+
+- **字段锁定即只读**：`isLocked` 或 `editable: false` 的字段，对应视图的拖拽会自动禁用，不会出现「拖了但写不进去」。
+- **甘特一次拖拽只算一步撤销**：改期要同时动开始和结束两个字段，所以走 `onUpdateCells` 批量写；只接 `onUpdateCell` 会变成两步撤销。
+- **时间不被静默抹掉**：日历和甘特写回日期时，如果原值带 `HH:mm` 会保留，不会把 `09:30` 变成 `00:00`。
+- **甘特缺日期不崩**：只填一端的记录按单日任务显示，两端颠倒会自动纠正，都没填的行显示「未设置日期」。
+
+---
+
+## 筛选、汇总与复制
+
+### 操作符按列类型分流
+
+文本列没有「大于」这种说法，数字列也不需要「包含」，所以操作符列表随列类型变化：
+
+| 列类型 | 可用操作符 |
+| --- | --- |
+| 文本 / 单选 / 多选 / 成员 | 包含、不包含、等于、不等于、开头是、为空、不为空 |
+| 数字 / 日期 | 等于、不等于、**大于、大于等于、小于、小于等于、介于**、为空、不为空 |
+
+求值口径（`src/filtering.ts`，纯函数）：
+
+- **数字列**自动剥掉千分位、货币符号、百分号再比较，`¥2,500` 与 `2500` 等价；
+- **日期列**兼容 `2026-10-08` / `2026/10/08` / `2026-10-08 09:30`，按时间戳比大小；
+- **空值不参与大小比较**——不是当成 0，否则 `数量 < 100` 会把没填数量的行也算进去；
+- **「介于」上下界写反也照常工作**，不让用户为顺序买单；
+- 换字段时若原操作符不适用，自动降级为默认操作符，不会留下「数字列 大于 abc」的死条件。
+
+### 分组汇总
+
+分组时数字列默认按「求和」出组尾汇总行，日期列可配置取最大/最小日期。汇总方式在「视图配置 → 汇总方式」里按列设置，选「自动」即沿用默认，选具体方式即覆盖，清空配置可恢复。
+
+```ts
+updateViewConfig(activeViewId, {
+  summaryRules: { amount: 'sum', due: 'max', owner: 'count' } // 'none' 可关掉某列的自动求和
+});
+```
+
+- 非叶子分组汇总的是**全部后代记录**，不只是直接子行；
+- 未分组时默认不出汇总行，只有显式配了 `summaryRules` 才出底部合计行；
+- 数值计算跳过空值，平均值不会被系统性拉低。
+
+### 区域选择与复制
+
+| 操作 | 效果 |
+| --- | --- |
+| 点击单元格 | 选中并设为锚点 |
+| Shift + 方向键 | 从锚点扩展成矩形选区 |
+| 方向键 | 逐格移动（编辑输入框时不抢键） |
+| Ctrl / Cmd + C | 复制选区为 TSV，粘进 Excel 自动分列 |
+| Esc | 取消选区 |
+
+**Shift + 点击 = 选行，不是选单元格**：在行内任意位置（含复选框、行号）Shift+点击，会把锚点行到当前行的**整行勾选集**一次性选中，锚点保持不动，所以可以连续 Shift+点击反复调整终点。这条路径走 `onSelectRows`；宿主没接时退化为用 `onToggleCheck` 逐行对账（区间外的取消、区间内的勾上），调用次数只与当前勾选数 + 区间长度有关，不随总行数增长。
+
+配合「Shift+点击选行」，单元格编辑器在 Shift 按下时**不会进入编辑态**——否则输入框会抢走焦点，范围选择看起来像没生效。
+
+复制走 `navigator.clipboard`，非安全上下文（http 内网）自动降级到 `execCommand`。宿主可通过 `onCopyCells` 拿到 `{ text, rows, columns }` 做「已复制 3×2」之类的提示。
+
+### 导出
+
+`exportView(format, filename?)` 导出的是**当前视图的可见结果**：筛选、排序已应用，隐藏列不导出。
+
+- **.xlsx**：自己拼最小 OOXML 包（ZIP 用存储模式，不压缩），数字/布尔保留真实类型，Excel 里能直接求和；不引 SheetJS（约 800KB）；
+- **.csv**：RFC 4180 转义 + UTF-8 BOM，中文版 Excel 打开不乱码；数字列输出纯数字而非 `¥2,500`，否则会被当文本。
+
+### 虚拟滚动
+
+平铺（无分组 / 无父子层级）且行数超过 `virtualThreshold`（默认 150）时，只渲染可视区上下各 12 行，其余用占位行撑出滚动条高度。
+
+- 行高固定（32 / 40 / 52px，随密度变化），所以偏移可以直接算，不需要测量 DOM；
+- 滚动位置按行高量化，滚一屏只触发几次重渲染，不是每像素一次；
+- 有分组时不启用（分组头与数据行交错，窗口要跨组计算，收益远小于复杂度）；
+- 已知取舍：虚拟滚动开启时，跨屏拖拽填充需要目标行在可视区内。
 
 ---
 
@@ -190,6 +287,133 @@ export function TaskTable() {
 
 ---
 
+## 嵌入到已有平台
+
+这个库的定位是**引擎**而不是**应用**：它不假设自己有路由、有后端、有全局状态，可以直接塞进你已有的系统里当一块积木。嵌入时只需要守住这几条契约。
+
+**1. 数据入口只有一个，就是 `initialData`。**
+宿主拿到后端数据后传进来，库不自己发请求。数据变更通过 `onDataChange` 回传，你决定是 PATCH 到接口还是写 IndexedDB。
+
+```tsx
+const bt = useBitable<Task>({
+  storageKey: `task-table-${projectId}`,   // 按业务实体切命名空间
+  initialData: tasksFromApi,
+  defaultColumns: columnsFromApi,
+  presetViews: viewsFromApi,
+  onDataChange: (next) => api.saveTasks(next),   // 唯一的写出口
+  schemaVersion: 'v3'                            // 后端字段变了就调大，旧缓存自动重置
+});
+```
+
+**2. 多实例天然隔离，不需要额外的 Provider。**
+`storageKey` 是完整的命名空间（`_data` / `_columns` / `_views` / `_active_view_id` / `_schema_version`）。同一个页面挂两个表、或者一个平台里嵌十个业务页，只要 `storageKey` 不同就互不干扰。
+
+> 注意：**同一个 `storageKey` 不要挂两个实例**。两个 `useBitable` 会各自往同一个 key 写，互相覆盖。需要只读展示（比如仪表盘）时，读 `localStorage` 而不是再起一个 hook。
+
+**3. 可以只嵌一部分。**
+不想给用户看工具栏，就只渲染 `BitableTable`；只要看板，就把 `viewType` 固定成 `'kanban'`。所有弹层和工具栏都是独立组件，按需引入。
+
+**4. 尺寸由父容器决定。**
+`BitableTable` 传 `fillHeight` 时撑满父级高度（父级要是确定高度的 flex 列），否则沿用视口截断。嵌在 Tab、抽屉、弹窗里时优先用 `fillHeight`。
+
+**5. 主题靠 CSS 变量，不靠构建配置。**
+
+```css
+:root {
+  --bitable-primary: #7c3aed;
+  --bitable-primary-hover: #6d28d9;
+  --bitable-primary-light: #f5f3ff;
+  --bitable-primary-border: #ddd6fe;
+}
+```
+
+**6. 图标字体要自托管。**
+组件用 Google Material Symbols。内网 / 离线平台请把字体文件放进自己的静态资源，或替换 `material-symbols-outlined` 那一层的图标组件。
+
+**7. SSR 安全但不持久。**
+没有 `localStorage` 的环境会自动降级为内存存储，不会抛异常，但刷新即丢。服务端渲染的平台请在客户端挂载后再依赖持久化。
+
+---
+
+## 导入 Excel / CSV
+
+上传一个表格文件，直接变成一张多维表：自动识别字段类型、自动生成单选项、可逐列改类型后导入。
+
+```tsx
+import { BitableImportDialog } from 'react-bitable';
+
+const [importOpen, setImportOpen] = useState(false);
+
+<BitableToolbar onAddRecord={...} onImport={() => setImportOpen(true)} />
+
+<BitableImportDialog
+  open={importOpen}
+  onClose={() => setImportOpen(false)}
+  existingColumns={columns}
+  onImport={({ mode, columns, rows }) => importTable({ columns, rows, mode })}
+/>
+```
+
+`importTable` 来自 `useBitable`，返回 `{ columns, rows }` 表示导入后的字段数与记录数。
+
+### 支持的格式
+
+| 格式 | 说明 |
+| --- | --- |
+| `.xlsx` | 原生解析，支持多工作表、共享字符串、日期格式、稀疏单元格 |
+| `.csv` | 自动识别 `,` `;` `\t` 分隔符；支持引号包裹、字段内换行、`""` 转义 |
+| `.tsv` | 按制表符解析 |
+
+限制：单文件 ≤ 20MB、≤ 50000 行（`maxBytes` / `maxRows` 可调）。老版 `.xls`（OLE 二进制）不支持，会提示另存为 `.xlsx`。
+
+**编码**：UTF-8 / UTF-8 BOM / UTF-16 / **GBK** 都能正确解码——中文 Excel 另存的 CSV 默认是 GBK，这一条是专门为它做的。
+
+### 类型推断规则
+
+按「布尔 → 数字 → 日期 → 超链接 → 单选 → 文本」的顺序判定，每类要求 ≥95% 的非空样本命中：
+
+| 判定 | 依据 | 示例 |
+| --- | --- | --- |
+| 复选框 | 全为 `TRUE/FALSE` `是/否` `✓/✗` | `是` `否` |
+| 数字 | 纯数字、千分位、货币前缀、百分号 | `128000` `1,280.50` `¥3200` `65%` |
+| 日期 | `YYYY-MM-DD` `YYYY/M/D` `YYYY年M月D日` `M/D/YYYY` 及带时间 | `2026-10-08` |
+| 超链接 | 以 `http(s)://` 或 `www.` 开头 | `https://…` |
+| 单选 | 去重值 ≤20、出现过重复、重复率够高、单值 ≤20 字符 | `进行中/已完成` |
+| 文本 | 以上都不满足 | 长句、编号、姓名 |
+
+> 百分数会存成小数（`65%` → `0.65`），这样排序和求和才正确。
+
+### 两种导入模式
+
+- **替换当前表**：字段与记录整体替换。视图页签保留，但筛选 / 排序 / 分组 / 染色 / 隐藏列等依赖旧字段的配置会被清空——否则规则指向已不存在的字段，会把所有行筛空。
+- **追加记录**：按表头把新列并入已有字段（同名复用、异名新增），只追加记录，已有字段的 id、类型、染色规则都不动。
+
+两种模式都只产生**一步撤销**，误导入按 `Ctrl+Z` 整体退回。
+
+### 为什么不用 SheetJS
+
+`.xlsx` 本质是个 ZIP 包着若干 XML，浏览器原生就有 `DecompressionStream('deflate-raw')` 和 `DOMParser`。自己读大约 400 行，换来的是**运行时依然零依赖**（gzip 后约 +4KB）。引入 SheetJS 会让包体增加约 800KB，与「零 runtime 依赖」的定位冲突。
+
+纯函数也可以单独用，不经过 UI：
+
+```ts
+import { parseSpreadsheetFile, buildImportResult } from 'react-bitable';
+
+const wb = await parseSpreadsheetFile(file);
+const { columns, rows } = buildImportResult(wb.sheets[0], { hasHeader: true });
+```
+
+| 导出 | 用途 |
+| --- | --- |
+| `parseSpreadsheetFile(file)` | 统一入口，按内容嗅探 xlsx / csv / tsv |
+| `parseXlsx(buffer)` / `parseDelimited(text)` | 分格式解析 |
+| `buildImportResult(sheet, opts)` | 矩阵 → `columns` + `rows`，`opts.typeOverrides` 可按列下标强制类型 |
+| `inferColumnType(values)` | 单列类型推断，返回 `{ type, options, confidence }` |
+| `normalizeDateText` / `parseNumberText` / `parseBooleanText` | 单值归一化原子函数 |
+| `normalizeMatrix` | 去尾部空行空列、补齐宽度 |
+
+---
+
 ## API
 
 ### `useBitable<T>(options)`
@@ -225,6 +449,8 @@ resetColumns, renameColumn, resizeColumn
 
 // 数据
 updateCell, updateCells, addRow, deleteRow, deleteRows, insertRow, duplicateRow,
+importTable,  // 导入 Excel / CSV：{ columns, rows, mode: 'replace' | 'append' }
+exportView,   // 导出当前视图：exportView('xlsx' | 'csv', filename?)
 detachRow, moveRow
 
 // 撤销重做
@@ -250,7 +476,8 @@ toggleGroupCollapse, toggleAllGroupsCollapse
 | --- | --- |
 | `BitableTable` | 主容器。按 `viewType` 分发到 6 种视图，处理行选择、勾选、右键菜单、拖拽、父子层级 |
 | `BitableViewTabs` | 视图页签栏：切换 / 新建 / 复制 / 删除 / 重命名 / 锁定 / 协作与个人视图切换 |
-| `BitableToolbar` | 工具栏：添加记录、批量删除、字段配置、筛选、分组、排序、密度、染色、搜索、`extraActions` 插槽 |
+| `BitableToolbar` | 工具栏：添加记录、批量删除、导入表格、导出、字段配置、筛选、分组、排序、密度、染色、搜索、`extraActions` 插槽 |
+| `BitableImportDialog` | 导入弹窗：拖拽上传 → 预览 → 逐列改类型 → 替换 / 追加 |
 | `BitableKanbanView` / `GalleryView` / `GanttView` / `CalendarView` / `FormView` | 各视图实现，一般不用直接引 |
 | `EditableCell` | 单元格编辑器，按字段类型分发到 input / select / date / checkbox |
 | `Bitable*Popover` | 字段、筛选、排序、分组、密度、染色、视图配置弹层 |
@@ -263,10 +490,15 @@ toggleGroupCollapse, toggleAllGroupsCollapse
 | prop | 作用 |
 | --- | --- |
 | `onFillCells(updates)` | 拖拽填充（单元格右下角手柄下拉）的批量写入回调。不接会退化成逐格 `onUpdateCell`，产生 N 次保存反馈 |
-| `onSelectRows(ids)` | Shift+点击范围选择回传的行集合，页面把勾选集整体替换为这批行 |
+| `onSelectRows(ids)` | Shift+点击范围选择回传的行集合，页面把勾选集整体替换为这批行。**不接也能用**（组件会用 `onToggleCheck` 对账），但接上更准、更快 |
+| `onUndo` / `onRedo` / `canUndo` / `canRedo` / `undoLabel` / `redoLabel` | 工具栏的撤销 / 重做按钮。**这组不传，按钮不渲染**（快捷键 Ctrl+Z / Ctrl+Shift+Z 由 hook 自己接管，不受影响） |
 | `isLockProtectedColumn(id)` | 命中的已锁定列视为「后端固定字段」：锁图标显示红色且不可解锁 |
 | `fillHeight` | 撑满父容器高度（父级需为确定高度的 flex 列），多台账页统一传 `true` 才能对齐底边 |
 | `onOpenAttachment(row)` | 画册视图封面点「预览附件」时回传该行，由页面接到自己的附件查看器 |
+| `onUpdateCells(updates, label?)` | 批量写回，一次只算一步撤销。甘特拖拽改期用它同时改开始与结束；`label` 会进撤销提示 |
+| `onCreateRow(values)` | 表单视图提交回调，值已按字段类型转换好（数字→number、复选框→boolean、多选→string[]）。不接则表单只做校验不写回 |
+| `onCopyCells({ text, rows, columns })` | 单元格区域复制回调，`text` 是 TSV。接上就能提示「已复制 3×2」 |
+| `virtualThreshold` | 平铺大表启用虚拟滚动的行数阈值，默认 `150`；传 `0` 关闭 |
 
 ### 纯函数工具
 
@@ -282,6 +514,11 @@ toggleGroupCollapse, toggleAllGroupsCollapse
 | `buildCardModel` / `resolveCardFields` / `getFieldText` | 看板 / 画册 / 甘特的卡片模型 |
 | `pickStatusColumn` / `pickDateColumn` / `formatTag` / `personFieldLabel` | 卡片取字段的启发式规则 |
 | `SELECT_OPTION_PALETTE` | 新建选项时的取色盘 |
+| `applyFilterRules` / `matchesRule` / `compareValues` | 筛选求值：给定行、规则与列类型，返回是否命中。仪表盘等只读场景可直接复用同一套口径 |
+| `resolveComparableKind` / `operatorsFor` / `TEXT_OPERATORS` / `ORDERED_OPERATORS` | 操作符适用范围与比较语义，保证 UI 放开的能力和求值端一致 |
+| `computeSummary` / `resolveSummaryType` / `formatNumber` | 分组汇总：`{ count, cells }`，跳过空值，数字千分位、日期取极值时保留原格式 |
+| `buildCsv` / `buildXlsx` / `exportRows` / `downloadBlob` | 导出：TSV/CSV 转义、最小 OOXML 打包、浏览器下载（SSR 下静默跳过） |
+| `cellToText` / `columnLetter` / `crc32` | 导出底层原子函数 |
 
 ### 字段类型
 
@@ -357,7 +594,11 @@ src/
 ├── useBitable.ts                状态中枢：持久化、筛选排序分组、撤销重做、所有写操作
 ├── cardModel.ts                 看板 / 画册 / 甘特共用的卡片模型
 ├── cellValue.ts                 单元格取值与选项解析（纯函数）
+├── filtering.ts                 筛选求值：比较语义 + 操作符适用范围（纯函数）
+├── aggregate.ts                 分组汇总：求和/平均/极值/计数（纯函数）
+├── exportTable.ts               CSV / 最小 OOXML xlsx 导出（纯函数 + 下载入口）
 ├── fillSeries.ts                拖拽填充计划（纯函数）
+├── spreadsheet.ts               Excel / CSV 解析与字段类型推断（纯函数，零依赖）
 ├── BitableTable.tsx             主容器 + 表格视图 + 父子记录 + 拖拽
 ├── BitableViewTabs.tsx          视图页签
 ├── BitableToolbar.tsx           工具栏（窄屏三档自适应）
@@ -367,6 +608,7 @@ src/
 ├── BitableCalendarView.tsx      日历
 ├── BitableFormView.tsx          表单
 ├── EditableCell.tsx             单元格编辑器
+├── BitableImportDialog.tsx      导入 Excel / CSV 弹窗
 └── Bitable*Popover.tsx          各类配置弹层
 playground/                      demo（npm run dev）
 ```
@@ -376,9 +618,9 @@ playground/                      demo（npm run dev）
 ## 已知限制
 
 - **仅客户端**：持久化走 `localStorage`，多标签页 / 多人协作需要自己接后端。SSR 下会自动降级为内存存储（可用但不持久）。
-- **无虚拟滚动**：万行级数据会卡，需要自己做窗口化。
+- **虚拟滚动只覆盖平铺大表**：有分组或父子层级时不启用窗口化，几万行 + 分组仍会卡；虚拟滚动开启时跨屏拖拽填充需要目标行在可视区内。
 - **`any` 未收干净**：`BitableColumnConfig<T = any>` 等位置保留了 `any`，泛型收紧要逐步做。
-- **无测试**：仓库目前没有单元测试，靠 playground 手工回归。
+- **无测试**：仓库目前没有单元测试，靠 playground 手工回归（纯函数模块可单独 import 测，`filtering` / `aggregate` / `exportTable` 都已用临时脚本验过边界）。
 - **图标依赖 Google Fonts**：离线环境需自托管字体。
 
 ## Roadmap
@@ -387,8 +629,14 @@ playground/                      demo（npm run dev）
 - [x] 视图级列显隐与列顺序
 - [x] 撤销 / 重做（Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y）
 - [x] 拖拽填充（Excel 式下拉）
-- [ ] 虚拟滚动（万行级）
-- [ ] 导出 CSV / XLSX
+- [x] 导入 Excel / CSV（零依赖 xlsx 解析 + 类型推断）
+- [x] 六种视图全部可写（看板拖拽换列、日历拖拽改期、表单写回、甘特真实时间轴）
+- [x] 数字 / 日期比较操作符（大于、大于等于、小于、小于等于、介于）
+- [x] 分组汇总与底部合计
+- [x] 单元格区域选择、方向键导航、Ctrl+C 复制为 TSV
+- [x] 导出 CSV / XLSX（零依赖）
+- [x] 虚拟滚动（平铺大表）
+- [ ] 分组状态下的虚拟滚动
 - [ ] 数据源适配层（REST / Supabase）
 - [ ] Vitest + Testing Library 覆盖 hook 与筛选排序逻辑
 - [ ] 去掉 Google Fonts 依赖，改内置 SVG 图标
