@@ -7,3 +7,6 @@ Thumbs.db
 demo-dist/
 npm-debug.log*
 yarn-error.log*
+
+# 本地协作助手的工作区记忆（会话日志 / 项目笔记），不随仓库发布
+.workbuddy-ai/
