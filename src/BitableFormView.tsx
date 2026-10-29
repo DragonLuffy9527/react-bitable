@@ -5,6 +5,11 @@ interface BitableFormViewProps<T extends { id: string }> {
   items: T[];
   columns: BitableColumnConfig<T>[];
   viewConfig?: BitableViewConfig;
+  /**
+   * 提交回调：拿到已按字段类型转换好的值。
+   * 不传时表单退化为「只演示校验与成功页」，不写回数据。
+   */
+  onSubmit?: (values: Record<string, unknown>) => void;
 }
 
 const inputTypeOf = (col: BitableColumnConfig<any>): string => {
@@ -14,10 +19,34 @@ const inputTypeOf = (col: BitableColumnConfig<any>): string => {
   return 'text';
 };
 
+/**
+ * 表单值 → 行数据。
+ *
+ * 表单里所有值都是字符串（受控 input 的天然形态），写入前必须按字段类型还原，
+ * 否则数字列会变成 `"65"`、复选框会变成字符串 `"false"`——后者在 JS 里是真值，
+ * 表格里的复选框会全部显示成勾选。
+ */
+const coerceFormValue = (col: BitableColumnConfig<any>, raw: string): unknown => {
+  const s = raw.trim();
+  if (col.type === 'boolean') return s === 'true' || s === '1' || s === '是';
+  if (!s) return '';
+  switch (col.type) {
+    case 'number': {
+      const n = Number(s.replace(/,/g, ''));
+      return Number.isFinite(n) ? n : null;
+    }
+    case 'multiSelect':
+      return s.split(',').map((v) => v.trim()).filter(Boolean);
+    default:
+      return s;
+  }
+};
+
 export const BitableFormView = <T extends { id: string }>({
   items,
   columns,
-  viewConfig
+  viewConfig,
+  onSubmit
 }: BitableFormViewProps<T>) => {
   const formFields = (viewConfig?.formFields && viewConfig.formFields.length > 0
     ? viewConfig.formFields
@@ -44,6 +73,14 @@ export const BitableFormView = <T extends { id: string }>({
       return;
     }
     setErrors([]);
+
+    if (onSubmit) {
+      const payload: Record<string, unknown> = {};
+      formFields.forEach((col) => {
+        payload[col.id] = coerceFormValue(col, String(values[col.id] ?? ''));
+      });
+      onSubmit(payload);
+    }
     setSubmitted(true);
   };
 
@@ -98,12 +135,25 @@ export const BitableFormView = <T extends { id: string }>({
           {formFields.map((col) => {
             const required = requiredFields.some((c) => c.id === col.id);
             return (
-              <label key={col.id} className="block">
+              <div key={col.id} className="block">
                 <div className="text-[11.5px] font-medium text-slate-700 mb-1">
                   {col.label}
                   {required && <span className="text-rose-500 ml-0.5">*</span>}
                 </div>
-                {col.type === 'multiSelect' && col.options && col.options.length > 0 ? (
+                {col.type === 'boolean' ? (
+                  // 复选框：值以 'true'/'false' 字符串存在表单 state 里，提交时再还原成布尔
+                  <label className="inline-flex items-center gap-2 h-8 cursor-pointer text-[12px] text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={values[col.id] === 'true'}
+                      onChange={(e) =>
+                        setValues((p) => ({ ...p, [col.id]: e.target.checked ? 'true' : 'false' }))
+                      }
+                      className="w-4 h-4 accent-[#005BAC] cursor-pointer"
+                    />
+                    <span>{values[col.id] === 'true' ? '是' : '否'}</span>
+                  </label>
+                ) : col.type === 'multiSelect' && col.options && col.options.length > 0 ? (
                   // 多选：复选框组，值仍以逗号串存在 values 里（表单不落库，无需数组类型）
                   <div className="flex flex-wrap gap-1.5">
                     {col.options.map((o) => {
@@ -141,6 +191,7 @@ export const BitableFormView = <T extends { id: string }>({
                     value={values[col.id] ?? ''}
                     onChange={(e) => setValues((p) => ({ ...p, [col.id]: e.target.value }))}
                     className="w-full h-8 px-2 text-[12px] bg-white border border-slate-200 rounded-md focus:outline-none focus:border-[#005BAC] cursor-pointer"
+                    aria-label={col.label}
                   >
                     <option value="">请选择</option>
                     {col.options.map((o) => (
@@ -156,9 +207,10 @@ export const BitableFormView = <T extends { id: string }>({
                     onChange={(e) => setValues((p) => ({ ...p, [col.id]: e.target.value }))}
                     placeholder={`请输入${col.label}`}
                     className="w-full h-8 px-2.5 text-[12px] bg-white border border-slate-200 rounded-md focus:outline-none focus:border-[#005BAC]"
+                    aria-label={col.label}
                   />
                 )}
-              </label>
+              </div>
             );
           })}
 
@@ -171,7 +223,9 @@ export const BitableFormView = <T extends { id: string }>({
 
         {/* Submit */}
         <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/60 flex items-center justify-between">
-          <span className="text-[10.5px] text-slate-400">提交后将新增一条记录（演示环境不落库）</span>
+          <span className="text-[10.5px] text-slate-400">
+            {onSubmit ? '提交后将向当前数据表新增一条记录' : '未接入写回：仅演示校验与成功页'}
+          </span>
           <button
             type="submit"
             className="h-8 px-4 rounded bg-[#005BAC] hover:bg-[#004785] text-white text-[12px] font-medium cursor-pointer transition-colors"

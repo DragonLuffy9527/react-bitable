@@ -1,3 +1,6 @@
+// 仅类型引用（编译后擦除），aggregate.ts 反向只依赖本文件的 BitableFieldType，不构成运行时循环
+import type { BitableSummaryResult, BitableSummaryType } from './aggregate';
+
 export type BitableFieldType =
   | 'text'
   | 'number'
@@ -77,20 +80,28 @@ export interface BitableColumnConfig<T = any> {
   resolveFiles?: (row: T) => { name: string; size?: string; url?: string }[];
 }
 
-export type FilterOperator = 
-  | 'contains' 
-  | 'not_contains' 
-  | 'equals' 
-  | 'not_equals' 
-  | 'starts_with' 
-  | 'is_empty' 
-  | 'is_not_empty';
+export type FilterOperator =
+  | 'contains'
+  | 'not_contains'
+  | 'equals'
+  | 'not_equals'
+  | 'starts_with'
+  | 'is_empty'
+  | 'is_not_empty'
+  // 数值 / 日期比较：数字列按数值比，日期列按时间比，文本列退化为字典序
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'between';
 
 export interface BitableFilterRule {
   id: string;
   fieldId: string;
   operator: FilterOperator;
   value: string;
+  /** `between` 的区间上界；其他操作符不用 */
+  value2?: string;
 }
 
 export interface BitableSortRule {
@@ -120,6 +131,7 @@ export interface BitableGroupSection<T = any> {
   direction: 'asc' | 'desc';
   items: T[]; // 属于该分支的所有数据项
   isLeaf: boolean; // 是否为最底层（叶子分组直接包含数据行）
+  summary?: BitableSummaryResult; // 该分组的汇总结果（未配置汇总时为空）
 }
 
 export interface BitableColorRule {
@@ -162,7 +174,10 @@ export interface BitableViewConfig {
   // —— 视图类型专属配置（新建视图时选定类型后，配置面板按类型显示对应项） ——
   kanbanFieldId?: string | null; // 看板：泳道分组字段（默认自动识别 状态/专业）
   galleryCoverFieldId?: string | null; // 画册：封面字段（默认蓝图占位）
-  ganttStageFieldId?: string | null; // 甘特：阶段/版次字段（默认 REV 五阶段）
+  /** @deprecated 甘特已改为真实时间轴，改用 ganttStartFieldId / ganttEndFieldId */
+  ganttStageFieldId?: string | null;
+  ganttStartFieldId?: string | null; // 甘特：开始日期字段（未设置时按字段名自动识别）
+  ganttEndFieldId?: string | null; // 甘特：结束日期字段（未设置时按字段名自动识别）
   calendarDateFieldId?: string | null; // 日历：日期字段（默认 updatedAt/date/timestamp）
   formSubmitText?: string; // 表单：提交按钮文案
   formFields?: string[]; // 表单：展示字段（空=全部可见字段）
@@ -176,4 +191,8 @@ export interface BitableViewConfig {
   // —— 表单 ——
   formRequiredFields?: string[]; // 必填字段 id（空=前两个字段）
   formSuccessText?: string; // 提交成功提示
+  // —— 汇总（分组汇总 / 底部合计） ——
+  // fieldId → 汇总方式。未配置的字段：分组状态下数字列默认求和，其余不汇总。
+  // 显式写 'none' 可关掉某个字段的自动求和。
+  summaryRules?: Record<string, BitableSummaryType>;
 }

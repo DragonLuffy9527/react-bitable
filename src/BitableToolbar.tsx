@@ -26,6 +26,10 @@ interface BitableToolbarProps<T> {
   isMasterView?: boolean;
   onAddRecord: () => void;
   onDeleteRecord?: () => void;
+  /** 点击「导入表格」按钮：通常打开 BitableImportDialog，不传则不显示该按钮 */
+  onImport?: () => void;
+  /** 点击「导出」菜单项：导出当前视图（已筛选/排序后）的全部记录 */
+  onExport?: (format: 'csv' | 'xlsx') => void;
   selectedRecordCount?: number;
   // Undo / Redo（Ctrl+Z / Ctrl+Shift+Z），不传则不显示
   onUndo?: () => void;
@@ -83,6 +87,8 @@ export const BitableToolbar = <T,>({
   isMasterView = false,
   onAddRecord,
   onDeleteRecord,
+  onImport,
+  onExport,
   selectedRecordCount = 0,
   onUndo,
   onRedo,
@@ -120,6 +126,7 @@ export const BitableToolbar = <T,>({
   extraActions
 }: BitableToolbarProps<T>) => {
   const [activePopover, setActivePopover] = useState<ActivePopoverType>(null);
+  const [exportOpen, setExportOpen] = useState(false);
   const toolbarRef = useRef<HTMLDivElement>(null);
 
   // 窄屏自适应：按工具栏自身宽度分三档，保证任何窗口下都尽量只占一行，
@@ -278,6 +285,77 @@ export const BitableToolbar = <T,>({
         )}
 
         <div className="h-4 w-px bg-slate-200 mx-0.5" />
+
+        {/* ⬆ 导入表格（Excel / CSV） */}
+        {onImport && (
+          <button
+            type="button"
+            onClick={onImport}
+            className="h-7 px-2 tb-tight flex items-center gap-1 rounded font-medium text-[12px] transition-all cursor-pointer border bg-white hover:bg-slate-50 text-slate-600 border-slate-200 shrink-0"
+            title="上传 Excel / CSV，自动识别字段类型并导入为多维表"
+          >
+            <span className="material-symbols-outlined text-[15px] leading-none text-slate-400">
+              upload_file
+            </span>
+            <span className={labelCls}>导入表格</span>
+          </button>
+        )}
+
+        {/* ⬇ 导出（Excel / CSV） */}
+        {onExport && (
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => setExportOpen((v) => !v)}
+              className={`h-7 px-2 tb-tight flex items-center gap-1 rounded font-medium text-[12px] transition-all cursor-pointer border shrink-0 ${
+                exportOpen
+                  ? 'bg-blue-50 text-[#005BAC] border-[#005BAC]/40'
+                  : 'bg-white hover:bg-slate-50 text-slate-600 border-slate-200'
+              }`}
+              title="把当前视图（已筛选 / 排序 / 分组后的记录）导出为 Excel 或 CSV"
+            >
+              <span className="material-symbols-outlined text-[15px] leading-none text-slate-400">
+                download
+              </span>
+              <span className={labelCls}>导出</span>
+            </button>
+            {exportOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setExportOpen(false)} />
+                <div className="absolute left-0 top-full mt-1 w-48 bg-white border border-slate-200 rounded-lg shadow-xl z-50 py-1 text-[12px]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExportOpen(false);
+                      onExport('xlsx');
+                    }}
+                    className="w-full px-3 py-1.5 flex items-center gap-2 text-left text-slate-700 hover:bg-slate-50 cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[15px] text-emerald-600">
+                      table_view
+                    </span>
+                    <span className="flex-1">导出为 Excel</span>
+                    <span className="text-[10px] text-slate-400 font-mono">.xlsx</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExportOpen(false);
+                      onExport('csv');
+                    }}
+                    className="w-full px-3 py-1.5 flex items-center gap-2 text-left text-slate-700 hover:bg-slate-50 cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[15px] text-sky-600">
+                      description
+                    </span>
+                    <span className="flex-1">导出为 CSV</span>
+                    <span className="text-[10px] text-slate-400 font-mono">.csv</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {/* ↶ 撤销 / ↷ 重做（Ctrl+Z / Ctrl+Shift+Z） */}
         {onUndo && (

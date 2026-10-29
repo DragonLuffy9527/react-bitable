@@ -19,6 +19,27 @@ import { BitableGalleryView } from './BitableGalleryView';
 import { BitableGanttView } from './BitableGanttView';
 import { BitableCalendarView } from './BitableCalendarView';
 import { BitableFormView } from './BitableFormView';
+import { hasSummaryCells, SUMMARY_SHORT_LABELS } from './aggregate';
+import type { BitableSummaryResult } from './aggregate';
+import { cellToText } from './exportTable';
+
+/** clipboard API 在非安全上下文（http 内网）不可用时的兜底 */
+function fallbackCopyText(text: string): void {
+  if (typeof document === 'undefined') return;
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.top = '-1000px';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+  } catch {
+    // 老浏览器兜底失败时静默放弃：不影响用户继续用鼠标复制
+  }
+  document.body.removeChild(ta);
+}
 
 interface BitableTableProps<T extends { id: string }> {
   columns: BitableColumnConfig<T>[];
@@ -33,6 +54,7 @@ interface BitableTableProps<T extends { id: string }> {
         isLeaf?: boolean;
         fieldLabel?: string;
         groupValue?: string;
+        summary?: BitableSummaryResult;
       }[];
   selectedRowId?: string | null;
   onSelectRow?: (row: T) => void;
@@ -48,6 +70,13 @@ interface BitableTableProps<T extends { id: string }> {
   density: BitableDensity;
   colorRules: BitableColorRule[];
   onUpdateCell: (rowId: string, fieldId: string, value: any) => void;
+  /**
+   * 批量写回（一次调用只产生一步撤销）。
+   * 甘特拖拽改期用它同时改「开始」和「结束」，避免产生两步撤销。
+   */
+  onUpdateCells?: (updates: { rowId: string; fieldId: string; value: any }[], label?: string) => void;
+  /** 表单视图提交：新增一条记录。不传时表单只做校验与成功页，不写回数据 */
+  onCreateRow?: (values: Record<string, unknown>) => void;
   onDeleteRow?: (rowId: string) => void;
   onToggleColumnLock?: (columnId: string) => void;
   /**
@@ -85,10 +114,20 @@ interface BitableTableProps<T extends { id: string }> {
    */
   onFillCells?: (updates: BitableFillUpdate[]) => void;
   /**
+   * 单元格区域复制回调（Ctrl/Cmd+C 或拖选后复制）。
+   * text 为 TSV，可直接粘进 Excel；rows/columns 是区域尺寸，便于页面提示「已复制 3×2」。
+   */
+  onCopyCells?: (info: { text: string; rows: number; columns: number }) => void;
+  /**
    * 填充模式：撑满父容器高度（父级需为确定高度的 flex 列，本组件 h-full 内部滚动）。
    * 默认 false 时沿用旧版 max-h-[calc(100vh-215px)] 视口截断，四个台账页应统一传 true 以对齐底边。
    */
   fillHeight?: boolean;
+  /**
+   * 虚拟滚动阈值：平铺（无分组 / 无父子层级）且记录数超过该值时只渲染可视区附近的行。
+   * 导入大表后必备，否则几千个 <tr> 会把浏览器拖死。传 0 可完全关闭。
+   */
+  virtualThreshold?: number;
 }
 
 export const BitableTable = <T extends { id: string }>({
@@ -103,6 +142,8 @@ export const BitableTable = <T extends { id: string }>({
   density,
   colorRules,
   onUpdateCell,
+  onUpdateCells,
+  onCreateRow,
   onDeleteRow,
   onToggleColumnLock,
   isLockProtectedColumn,
@@ -121,6 +162,8 @@ export const BitableTable = <T extends { id: string }>({
   viewConfig,
   onOpenAttachment,
   onFillCells,
+  onCopyCells,
+  virtualThreshold = 150,
   fillHeight = false
 }: BitableTableProps<T>) => {
   const visibleColumns = columns.filter((c) => c.visible);
@@ -442,12 +485,28 @@ export const BitableTable = <T extends { id: string }>({
   // 新增/插入记录后滚动到该行并闪一下底色（排序视图里新行往往不在可视区）
   useEffect(() => {
     if (!scrollToRowId) return;
-    const el = document.querySelector<HTMLElement>(`tr[data-row-id="${scrollToRowId}"]`);
-    if (!el) return;
-    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    el.classList.add('bitable-row-flash');
-    const timer = window.setTimeout(() => el.classList.remove('bitable-row-flash'), 1700);
-    return () => window.clearTimeout(timer);
+    const flash = () => {
+      const el = document.querySelector<HTMLElement>(`tr[data-row-id="${scrollToRowId}"]`);
+      if (!el) return false;
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      el.classList.add('bitable-row-flash');
+      const timer = window.setTimeout(() => el.classList.remove('bitable-row-flash'), 1700);
+      return () => window.clearTimeout(timer);
+    };
+
+    const cleanup = flash();
+    if (cleanup) return cleanup;
+
+    // 虚拟滚动下目标行可能还没渲染：先把容器滚到那一行附近，下一帧再定位
+    const idx = visibleRowIdList.indexOf(scrollToRowId);
+    const root = cellContainerRef.current;
+    if (idx < 0 || !root) return;
+    root.scrollTop = Math.max(0, (idx - 5) * ROW_H);
+    setScrollTop(Math.max(0, Math.floor(root.scrollTop / ROW_H) * ROW_H));
+    const raf = requestAnimationFrame(() => {
+      flash();
+    });
+    return () => cancelAnimationFrame(raf);
   }, [scrollToRowId]);
 
   useEffect(() => {
@@ -546,6 +605,20 @@ export const BitableTable = <T extends { id: string }>({
     medium: 'h-10 py-1 text-[12px]',
     relaxed: 'h-13 py-2 text-[12.5px]'
   }[density];
+
+  // —— 虚拟滚动：行高固定（h-8/h-10/h-13），因此可以直接用数字算偏移 ——
+  const cellContainerRef = useRef<HTMLDivElement | null>(null);
+  const ROW_H = { compact: 32, medium: 40, relaxed: 52 }[density] ?? 40;
+  const HEADER_H = 32; // thead h-8
+  const OVERSCAN = 12; // 视口上下各多渲染 12 行，滚动时不会出现白边
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(600);
+
+  useLayoutEffect(() => {
+    const el = cellContainerRef.current;
+    if (!el) return;
+    if (el.clientHeight && el.clientHeight !== viewportH) setViewportH(el.clientHeight);
+  }, [viewportH, fillHeight]);
 
   // Total items
   const allItems = groupedData.flatMap((g) => g.items);
@@ -681,7 +754,10 @@ export const BitableTable = <T extends { id: string }>({
         columns={columns}
         selectedRowId={selectedRowId}
         onSelectRow={onSelectRow}
-        stageFieldId={viewConfig?.ganttStageFieldId || undefined}
+        startFieldId={viewConfig?.ganttStartFieldId || undefined}
+        endFieldId={viewConfig?.ganttEndFieldId || undefined}
+        onUpdateCell={onUpdateCell}
+        onUpdateCells={onUpdateCells}
         viewConfig={viewConfig}
       />
     );
@@ -694,6 +770,7 @@ export const BitableTable = <T extends { id: string }>({
         columns={columns}
         selectedRowId={selectedRowId}
         onSelectRow={onSelectRow}
+        onUpdateCell={onUpdateCell}
         viewConfig={viewConfig}
       />
     );
@@ -705,6 +782,7 @@ export const BitableTable = <T extends { id: string }>({
         items={allItems}
         columns={columns}
         viewConfig={viewConfig}
+        onSubmit={onCreateRow}
       />
     );
   }
@@ -784,25 +862,49 @@ export const BitableTable = <T extends { id: string }>({
     buildHierarchy(g.items).forEach((h) => visibleRowIdList.push(h.row.id));
   });
 
-  /** Shift+点击：选中锚点行到当前行的可见区间。成功返回 true（已处理），否则退化为普通点击 */
+  /**
+   * Shift+点击：选中锚点行到当前行的可见区间。
+   * 返回 true 表示已按范围处理（调用方此时不要再改锚点，否则连续 Shift+点击
+   * 每次都从上一行起算，永远只能选两行）。
+   */
   const shiftRangeSelect = (row: T, e: React.MouseEvent): boolean => {
     if (!e.shiftKey) return false;
-    const anchorId = anchorRowIdRef.current;
     const targetIdx = visibleRowIdList.indexOf(row.id);
+    if (targetIdx < 0) return false;
+
+    const anchorId = anchorRowIdRef.current;
     const anchorIdx = anchorId ? visibleRowIdList.indexOf(anchorId) : -1;
-    if (targetIdx < 0 || anchorIdx < 0 || !onSelectRows) return false;
+    // 锚点行被筛选掉/删掉了：把锚点重置到当前行，本次退化为普通点击
+    if (anchorIdx < 0) {
+      anchorRowIdRef.current = row.id;
+      return false;
+    }
+
     e.preventDefault();
     const [from, to] = anchorIdx <= targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
-    onSelectRows(visibleRowIdList.slice(from, to + 1));
+    const ids = visibleRowIdList.slice(from, to + 1);
+
+    if (onSelectRows) {
+      onSelectRows(ids);
+      return true;
+    }
+
+    // 宿主没接 onSelectRows：只能用 onToggleCheck 逐个「对账」，
+    // 让勾选集最终等于区间——区间外的取消、区间内的勾上。
+    // 调用次数被当前勾选数 + 区间长度限制，不会随总行数增长。
+    const wanted = new Set(ids);
+    Object.keys(checkedIds).forEach((id) => {
+      if (checkedIds[id] && !wanted.has(id)) onToggleCheck(id, e);
+    });
+    ids.forEach((id) => {
+      if (!checkedIds[id]) onToggleCheck(id, e);
+    });
     return true;
   };
 
   /** 行体点击：Shift=范围勾选；Ctrl/Cmd=切换该行勾选；普通=单行高亮（原有行为） */
   const handleRowClick = (row: T, e: React.MouseEvent) => {
-    if (shiftRangeSelect(row, e)) {
-      anchorRowIdRef.current = row.id;
-      return;
-    }
+    if (shiftRangeSelect(row, e)) return;
     if (e.ctrlKey || e.metaKey) {
       onToggleCheck(row.id, e);
     } else {
@@ -813,15 +915,161 @@ export const BitableTable = <T extends { id: string }>({
 
   /** 复选框点击：Shift=范围勾选；其余为原有单个切换 */
   const handleCheckboxClick = (row: T, e: React.MouseEvent) => {
-    if (!shiftRangeSelect(row, e)) {
-      onToggleCheck(row.id, e);
-    }
+    if (shiftRangeSelect(row, e)) return;
+    onToggleCheck(row.id, e);
     anchorRowIdRef.current = row.id;
   };
 
+  // —— 单元格区域选择 / 方向键导航 / 区域复制 ——
+  // 单元格本身不可聚焦，所以键盘事件挂在滚动容器上：点击单元格时用 preventScroll
+  // 把焦点交给容器，页面不会跳动，方向键和 Ctrl+C 才有落脚点。
+  type CellRef = { rowId: string; fieldId: string };
+  const [cellSel, setCellSel] = useState<{ anchor: CellRef; focus: CellRef } | null>(null);
+
+  const rowIndexById = new Map<string, number>();
+  visibleRowIdList.forEach((id, i) => rowIndexById.set(id, i));
+  const colIndexById = new Map<string, number>();
+  visibleColumns.forEach((c, i) => colIndexById.set(c.id, i));
+
+  const cellRange = (() => {
+    if (!cellSel) return null;
+    const r1 = rowIndexById.get(cellSel.anchor.rowId);
+    const r2 = rowIndexById.get(cellSel.focus.rowId);
+    const c1 = colIndexById.get(cellSel.anchor.fieldId);
+    const c2 = colIndexById.get(cellSel.focus.fieldId);
+    if (r1 === undefined || r2 === undefined || c1 === undefined || c2 === undefined) return null;
+    return {
+      rowStart: Math.min(r1, r2),
+      rowEnd: Math.max(r1, r2),
+      colStart: Math.min(c1, c2),
+      colEnd: Math.max(c1, c2)
+    };
+  })();
+
+  const isInCellRange = (rowId: string, fieldId: string) => {
+    if (!cellRange) return false;
+    const r = rowIndexById.get(rowId);
+    const c = colIndexById.get(fieldId);
+    if (r === undefined || c === undefined) return false;
+    return r >= cellRange.rowStart && r <= cellRange.rowEnd && c >= cellRange.colStart && c <= cellRange.colEnd;
+  };
+
+  const isFocusCell = (rowId: string, fieldId: string) =>
+    !!cellSel && cellSel.focus.rowId === rowId && cellSel.focus.fieldId === fieldId;
+
+  /** 选区转 TSV（Excel 粘贴标准）；顺带通知页面做「已复制 3×2」提示 */
+  const copyCellRange = () => {
+    if (!cellRange) return;
+    const rowById = new Map<string, T>();
+    groupedData.forEach((g) => g.items.forEach((r) => rowById.set(r.id, r)));
+
+    const lines: string[] = [];
+    for (let r = cellRange.rowStart; r <= cellRange.rowEnd; r++) {
+      const row = rowById.get(visibleRowIdList[r]);
+      if (!row) continue;
+      const cells: string[] = [];
+      for (let c = cellRange.colStart; c <= cellRange.colEnd; c++) {
+        cells.push(cellToText((row as any)[visibleColumns[c].id]));
+      }
+      lines.push(cells.join('\t'));
+    }
+    const text = lines.join('\n');
+    if (!text) return;
+
+    const info = {
+      text,
+      rows: cellRange.rowEnd - cellRange.rowStart + 1,
+      columns: cellRange.colEnd - cellRange.colStart + 1
+    };
+    const notify = () => onCopyCells?.(info);
+
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(notify, () => {
+        fallbackCopyText(text);
+        notify();
+      });
+    } else {
+      fallbackCopyText(text);
+      notify();
+    }
+  };
+
+  const handleCellKeyDown = (e: React.KeyboardEvent) => {
+    if (!cellSel) return;
+    const target = e.target as HTMLElement | null;
+    // 正在编辑单元格时不抢键盘
+    if (
+      target &&
+      (target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable)
+    ) {
+      return;
+    }
+
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+      e.preventDefault();
+      copyCellRange();
+      return;
+    }
+    if (e.key === 'Escape') {
+      setCellSel(null);
+      return;
+    }
+
+    const rowIdx = rowIndexById.get(cellSel.focus.rowId);
+    const colIdx = colIndexById.get(cellSel.focus.fieldId);
+    if (rowIdx === undefined || colIdx === undefined) return;
+
+    let nextRow = rowIdx;
+    let nextCol = colIdx;
+    if (e.key === 'ArrowUp') nextRow = Math.max(0, rowIdx - 1);
+    else if (e.key === 'ArrowDown') nextRow = Math.min(visibleRowIdList.length - 1, rowIdx + 1);
+    else if (e.key === 'ArrowLeft') nextCol = Math.max(0, colIdx - 1);
+    else if (e.key === 'ArrowRight') nextCol = Math.min(visibleColumns.length - 1, colIdx + 1);
+    else return;
+
+    e.preventDefault();
+    if (nextRow === rowIdx && nextCol === colIdx) return;
+
+    const next: CellRef = { rowId: visibleRowIdList[nextRow], fieldId: visibleColumns[nextCol].id };
+    // Shift+方向键扩展选区（锚点不动），否则整体移动
+    setCellSel((prev) => (prev ? { anchor: e.shiftKey ? prev.anchor : next, focus: next } : { anchor: next, focus: next }));
+
+    // 键盘移动后把目标单元格滚进可视区
+    requestAnimationFrame(() => {
+      const el = cellContainerRef.current?.querySelector(
+        `[data-cell="${CSS.escape(next.rowId)}:${CSS.escape(next.fieldId)}"]`
+      );
+      el?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
+  };
+
+  // 点到表格外面就取消选区，避免方向键继续被这张表接管
+  useEffect(() => {
+    if (!cellSel) return;
+    const onDown = (e: MouseEvent) => {
+      const root = cellContainerRef.current;
+      if (root && !root.contains(e.target as Node)) setCellSel(null);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [cellSel]);
+
   return (
     <div
-      className={`w-full overflow-auto bg-white border border-slate-200 rounded-lg shadow-2xs select-none ${
+      ref={cellContainerRef}
+      tabIndex={-1}
+      onKeyDown={handleCellKeyDown}
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        // 按行高量化，滚动一屏只会触发几次重渲染而不是每像素一次
+        const quantized = Math.max(0, Math.floor(el.scrollTop / ROW_H) * ROW_H);
+        setScrollTop((prev) => (prev === quantized ? prev : quantized));
+        if (el.clientHeight && el.clientHeight !== viewportH) setViewportH(el.clientHeight);
+      }}
+      className={`w-full overflow-auto bg-white border border-slate-200 rounded-lg shadow-2xs select-none focus:outline-none ${
         fillHeight ? 'h-full min-h-0' : 'max-h-[calc(100vh-215px)]'
       }`}
     >
@@ -1093,6 +1341,21 @@ export const BitableTable = <T extends { id: string }>({
               const groupVal = (group as any).groupValue || group.groupTitle;
               const isLeaf = (group as any).isLeaf !== false;
 
+              // —— 虚拟滚动窗口：只对「平铺大表」生效 ——
+              // 有分组时行是「分组头 + 数据行」交错结构，窗口边界要跨组计算，
+              // 收益远小于复杂度；而导入进来的大表默认就是平铺的，覆盖了真正的性能悬崖。
+              const hierarchy = isLeaf ? buildHierarchy(group.items) : [];
+              const isFlatAll = isDefaultAllGroup && !pcEnabled;
+              const virtualOn =
+                isFlatAll && virtualThreshold > 0 && hierarchy.length > virtualThreshold;
+              const bodyOffset = Math.max(0, scrollTop - HEADER_H);
+              const winStart = virtualOn
+                ? Math.max(0, Math.floor(bodyOffset / ROW_H) - OVERSCAN)
+                : 0;
+              const winEnd = virtualOn
+                ? Math.min(hierarchy.length, Math.ceil((bodyOffset + viewportH) / ROW_H) + OVERSCAN)
+                : hierarchy.length;
+
               // Shading by level
               const levelBg =
                 level === 0
@@ -1132,10 +1395,21 @@ export const BitableTable = <T extends { id: string }>({
                     </tr>
                   )}
 
+                  {/* 上占位行：把窗口之前的行高撑出来，滚动条长度才正确 */}
+                  {virtualOn && winStart > 0 && (
+                    <tr aria-hidden="true">
+                      <td
+                        colSpan={visibleColumns.length + 2}
+                        style={{ height: winStart * ROW_H, padding: 0, border: 0 }}
+                      />
+                    </tr>
+                  )}
+
                   {/* Group Rows (only if leaf group and not collapsed) */}
                   {isLeaf &&
                     !isCollapsed &&
-                    buildHierarchy(group.items).map((h, index) => {
+                    hierarchy.slice(winStart, winEnd).map((h, i) => {
+                      const index = winStart + i;
                       const row = h.row;
                       const depth = h.depth;
                       const hasChildren = h.hasChildren;
@@ -1302,10 +1576,30 @@ export const BitableTable = <T extends { id: string }>({
                               colIndex === visibleColumns.length - 1
                             );
                             const frozenEdge = isFrozenCol && col.id === lastFrozenId;
+                            const cellSelected = isInCellRange(row.id, col.id);
+                            const cellFocused = isFocusCell(row.id, col.id);
 
                             return (
                               <td
                                 key={col.id}
+                                data-cell={`${row.id}:${col.id}`}
+                                onMouseDown={(e) => {
+                                  if (e.button !== 0) return;
+                                  // Shift+点击交给行范围选择（handleRowClick），
+                                  // 这里不动单元格选区，避免两套选区同时变化
+                                  if (e.shiftKey) return;
+                                  const t = e.target as HTMLElement | null;
+                                  // 点输入框 / 下拉 / 按钮时不改选区，也不抢焦点
+                                  if (
+                                    t &&
+                                    t.closest('input, textarea, select, button, [contenteditable="true"]')
+                                  ) {
+                                    return;
+                                  }
+                                  const next = { rowId: row.id, fieldId: col.id };
+                                  setCellSel({ anchor: next, focus: next });
+                                  cellContainerRef.current?.focus({ preventScroll: true });
+                                }}
                                 className={`group/cell px-1.5 border-r border-slate-200 whitespace-nowrap overflow-hidden transition-colors ${
                                   isFrozenCol ? 'sticky z-10' : 'relative'
                                 } ${cellColorStyle?.className || (isFrozenCol ? 'bg-inherit' : '')}`}
@@ -1315,6 +1609,10 @@ export const BitableTable = <T extends { id: string }>({
                                   paddingLeft: isFirstCol ? `${8 + depth * 18}px` : undefined,
                                   ...(cellColorStyle?.style || {}),
                                   ...(isFrozenCol ? { left: frozenLeft } : {}),
+                                  ...(cellSelected ? { backgroundColor: 'rgba(0, 91, 172, 0.10)' } : {}),
+                                  ...(cellFocused
+                                    ? { outline: '2px solid #005BAC', outlineOffset: '-2px' }
+                                    : {}),
                                   boxShadow:
                                     [outline, frozenEdge ? '1px 0 0 0 #cbd5e1' : '']
                                       .filter(Boolean)
@@ -1373,6 +1671,69 @@ export const BitableTable = <T extends { id: string }>({
                         </tr>
                       );
                     })}
+
+                  {/* 下占位行：窗口之后的行高 */}
+                  {virtualOn && winEnd < hierarchy.length && (
+                    <tr aria-hidden="true">
+                      <td
+                        colSpan={visibleColumns.length + 2}
+                        style={{
+                          height: (hierarchy.length - winEnd) * ROW_H,
+                          padding: 0,
+                          border: 0
+                        }}
+                      />
+                    </tr>
+                  )}
+
+                  {/* 分组汇总行：每个配置了汇总的列在组尾显示合计/平均/最大/最小/计数 */}
+                  {isLeaf && !isCollapsed && hasSummaryCells(group.summary) && (
+                    <tr className="bg-slate-50 border-t border-dashed border-slate-300 text-[11px]">
+                      <td
+                        className="px-2 text-center border-r border-slate-200 sticky left-0 z-10 bg-inherit"
+                        style={{ width: 36, minWidth: 36 }}
+                        title="本组汇总"
+                      >
+                        <span className="material-symbols-outlined text-[13px] text-slate-400 leading-none">
+                          functions
+                        </span>
+                      </td>
+                      <td
+                        className="px-0 text-center border-r border-slate-200 sticky left-[36px] z-10 bg-inherit text-[10px] text-slate-400"
+                        style={{ width: 40, minWidth: 40 }}
+                      >
+                        {group.summary!.count}
+                      </td>
+                      {visibleColumns.map((col) => {
+                        const cell = group.summary!.cells[col.id];
+                        const frozenLeft = frozenLeftMap[col.id];
+                        return (
+                          <td
+                            key={col.id}
+                            className={`px-1.5 border-r border-slate-200 whitespace-nowrap overflow-hidden ${
+                              frozenLeft !== undefined ? 'sticky z-10 bg-inherit' : ''
+                            }`}
+                            style={{
+                              width: effectiveWidth(col),
+                              minWidth: effectiveMinWidth(col),
+                              ...(frozenLeft !== undefined ? { left: frozenLeft } : {})
+                            }}
+                          >
+                            {cell ? (
+                              <span className="flex items-baseline gap-1 min-w-0">
+                                <span className="text-[10px] text-slate-400 shrink-0">
+                                  {SUMMARY_SHORT_LABELS[cell.type]}
+                                </span>
+                                <span className="font-mono font-semibold text-slate-700 truncate">
+                                  {cell.text}
+                                </span>
+                              </span>
+                            ) : null}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  )}
                 </React.Fragment>
               );
             })

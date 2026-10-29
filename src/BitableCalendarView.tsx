@@ -7,9 +7,25 @@ interface BitableCalendarViewProps<T extends { id: string }> {
   columns: BitableColumnConfig<T>[];
   selectedRowId?: string | null;
   onSelectRow?: (row: T) => void;
+  /** 把事件条拖到别的日期格时写回日期字段。不传则事件条不可拖拽 */
+  onUpdateCell?: (rowId: string, fieldId: string, value: any) => void;
   /** 当前视图配置：日历按日期字段排布 */
   viewConfig?: BitableViewConfig;
 }
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+/**
+ * 生成写回字段的日期文本。
+ *
+ * 保留原值里的时间部分：把「2026-10-08 09:30」拖到 10 号，应得到
+ * 「2026-10-10 09:30」而不是把时间抹成 00:00——否则一次拖拽会静默丢掉时刻。
+ */
+const formatDateForField = (target: Date, original: string): string => {
+  const base = `${target.getFullYear()}-${pad2(target.getMonth() + 1)}-${pad2(target.getDate())}`;
+  const m = String(original).match(/(\d{1,2}):(\d{2})/);
+  return m ? `${base} ${pad2(Number(m[1]))}:${m[2]}` : base;
+};
 
 const parseDate = (raw: any): Date | null => {
   if (raw == null || raw === '') return null;
@@ -28,6 +44,7 @@ export const BitableCalendarView = <T extends { id: string }>({
   columns,
   selectedRowId,
   onSelectRow,
+  onUpdateCell,
   viewConfig
 }: BitableCalendarViewProps<T>) => {
   // 日期字段：优先视图配置，其次自动识别常见日期列
@@ -38,6 +55,29 @@ export const BitableCalendarView = <T extends { id: string }>({
   }, [viewConfig?.calendarDateFieldId, items]);
 
   const dateFieldLabel = columns.find((c) => c.id === dateFieldId)?.label || '日期';
+  const dateCol = columns.find((c) => c.id === dateFieldId);
+  // 字段锁定或宿主没接写回回调时，拖拽没有意义
+  const canDrag = !!onUpdateCell && dateCol?.editable !== false && !dateCol?.isLocked;
+
+  const [dragRowId, setDragRowId] = useState<string | null>(null);
+  const [overKey, setOverKey] = useState<string | null>(null);
+
+  const handleDrop = (e: React.DragEvent, target: Date) => {
+    e.preventDefault();
+    setOverKey(null);
+    setDragRowId(null);
+    if (!onUpdateCell || !canDrag) return;
+
+    const rowId = e.dataTransfer.getData('text/plain');
+    if (!rowId) return;
+    const row = items.find((it) => it.id === rowId);
+    if (!row) return;
+
+    const original = String((row as any)[dateFieldId] ?? '');
+    const next = formatDateForField(target, original);
+    if (next === original.trim()) return;
+    onUpdateCell(rowId, dateFieldId, next);
+  };
 
   // 排布配置：每周起始日 / 是否显示周末（对齐飞书日历视图的配置项）
   const showWeekend = viewConfig?.calendarShowWeekend !== false;
@@ -119,7 +159,10 @@ export const BitableCalendarView = <T extends { id: string }>({
           </span>
         </div>
         <div className="flex items-center gap-1">
-          <span className="text-[11px] text-slate-400 mr-1">共 {dated.length} 条有日期记录</span>
+          <span className="text-[11px] text-slate-400 mr-1">
+            共 {dated.length} 条有日期记录
+            {canDrag && dated.length > 0 && ' · 拖动事件条可改日期'}
+          </span>
           <button
             type="button"
             onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}
@@ -167,12 +210,29 @@ export const BitableCalendarView = <T extends { id: string }>({
           const key = cell.date ? `${cell.date.getFullYear()}-${cell.date.getMonth()}-${cell.date.getDate()}` : '';
           const dayItems = cell.date && cell.inMonth ? byDay.get(key) || [] : [];
           const isToday = key === todayKey;
+          const isOver = !!cell.date && overKey === key && !!dragRowId;
           return (
             <div
               key={idx}
-              className={`min-h-[92px] border-r border-b border-slate-100 p-1.5 ${
+              onDragOver={(e) => {
+                if (!canDrag || !cell.date) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                if (overKey !== key) setOverKey(key);
+              }}
+              onDragLeave={(e) => {
+                // 只在真正离开整个格子时清高亮，避免子元素之间移动导致闪烁
+                if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                setOverKey((prev) => (prev === key ? null : prev));
+              }}
+              onDrop={(e) => {
+                if (cell.date) handleDrop(e, cell.date);
+              }}
+              className={`min-h-[92px] border-r border-b border-slate-100 p-1.5 transition-colors ${
                 cell.inMonth ? 'bg-white' : 'bg-slate-50/60'
-              } ${(idx + 1) % colCount === 0 ? 'border-r-0' : ''}`}
+              } ${(idx + 1) % colCount === 0 ? 'border-r-0' : ''} ${
+                isOver ? 'ring-2 ring-inset ring-[#005BAC] bg-blue-50/50' : ''
+              }`}
             >
               {cell.date && cell.inMonth && (
                 <>
@@ -206,9 +266,23 @@ export const BitableCalendarView = <T extends { id: string }>({
                         <button
                           key={row.id}
                           type="button"
+                          draggable={canDrag}
+                          onDragStart={(e) => {
+                            if (!canDrag) return;
+                            e.stopPropagation();
+                            e.dataTransfer.setData('text/plain', row.id);
+                            e.dataTransfer.effectAllowed = 'move';
+                            setDragRowId(row.id);
+                          }}
+                          onDragEnd={() => {
+                            setDragRowId(null);
+                            setOverKey(null);
+                          }}
                           onClick={() => onSelectRow?.(row)}
-                          className={`w-full text-left px-1 py-0.5 rounded border text-[10px] truncate cursor-pointer transition-colors ${tone} ${
-                            isSelected ? 'ring-1 ring-[#005BAC]' : ''
+                          className={`w-full text-left px-1 py-0.5 rounded border text-[10px] truncate transition-colors ${tone} ${
+                            canDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
+                          } ${isSelected ? 'ring-1 ring-[#005BAC]' : ''} ${
+                            dragRowId === row.id ? 'opacity-40' : ''
                           }`}
                           title={[card.titleLabel && label, card.subtitle].filter(Boolean).join(' · ')}
                         >

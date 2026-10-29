@@ -90,6 +90,16 @@ export const EditableCell = <T,>({
   const isLocked = !!column.isLocked || !column.editable;
 
   /**
+   * 点击进入行内编辑。
+   * Shift+点击在表格里是「行范围选择」的起手式，不能顺手把编辑器打开——
+   * 否则输入框会抢走焦点，范围选择看起来像没生效。
+   */
+  const beginEdit = (e: React.MouseEvent) => {
+    if (e.shiftKey) return;
+    setIsEditing(true);
+  };
+
+  /**
    * 附件列：打开编辑浮层（可多选上传 / 逐个移除）。
    * 锁定列与后台固定字段（图纸识别录入）不会走到这里——上方 isLocked 分支直接只读返回。
    */
@@ -145,7 +155,7 @@ export const EditableCell = <T,>({
             openFilesPanel(e);
             return;
           }
-          setIsEditing(true);
+          beginEdit(e);
         }}
         className="group flex items-center gap-1 w-full h-full cursor-text rounded hover:bg-slate-100/60 -mx-1 px-1"
         title="点击行内编辑"
@@ -564,7 +574,7 @@ export const EditableCell = <T,>({
 
     return (
       <div
-        onClick={() => setIsEditing(true)}
+        onClick={beginEdit}
         className="cursor-pointer group flex items-center justify-between w-full h-full py-0.5"
         title="点击切换选项"
       >
@@ -608,7 +618,7 @@ export const EditableCell = <T,>({
 
     return (
       <div
-        onClick={() => setIsEditing(true)}
+        onClick={beginEdit}
         className="cursor-pointer flex items-center justify-between w-full group py-0.5"
         title="点击修改日期"
       >
@@ -644,7 +654,7 @@ export const EditableCell = <T,>({
 
     return (
       <div
-        onClick={() => setIsEditing(true)}
+        onClick={beginEdit}
         className="cursor-pointer group flex items-center justify-between w-full h-full py-0.5 rounded hover:bg-slate-100/60 px-1 -mx-1"
         title="点击录入数值"
       >
@@ -684,7 +694,7 @@ export const EditableCell = <T,>({
 
     return (
       <div
-        onClick={() => setIsEditing(true)}
+        onClick={beginEdit}
         className="cursor-pointer group flex items-center justify-between w-full h-full py-0.5"
         title="点击修改标签"
       >
@@ -866,7 +876,7 @@ export const EditableCell = <T,>({
     const list = toValueList(value);
     return (
       <div
-        onClick={() => setIsEditing(true)}
+        onClick={beginEdit}
         className="cursor-pointer group flex items-center justify-between gap-1 w-full h-full py-0.5"
         title={list.length ? `${list.join('、')}（点击修改）` : isUser ? '点击添加责任人' : '点击添加群组'}
       >
@@ -904,7 +914,7 @@ export const EditableCell = <T,>({
     if (!value) {
       return (
         <div
-          onClick={() => setIsEditing(true)}
+          onClick={beginEdit}
           className="cursor-pointer group flex items-center justify-between w-full h-full py-0.5"
           title="点击录入链接"
         >
@@ -951,7 +961,7 @@ export const EditableCell = <T,>({
 
   return (
     <div
-      onClick={() => setIsEditing(true)}
+      onClick={beginEdit}
       className="cursor-pointer group flex items-center justify-between w-full h-full py-0.5 rounded hover:bg-slate-100/60 px-1 -mx-1"
       title="点击直接行内编辑"
     >

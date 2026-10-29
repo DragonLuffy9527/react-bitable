@@ -48,6 +48,47 @@ export {
 } from './fillSeries';
 export type { BitableFillUpdate, BuildFillPlanOptions } from './fillSeries';
 
+// —— 筛选求值（纯函数，仪表盘/统计等只读场景可复用） ——
+export {
+  applyFilterRules,
+  matchesRule,
+  compareValues,
+  toComparable,
+  resolveComparableKind,
+  operatorsFor,
+  TEXT_OPERATORS,
+  ORDERED_OPERATORS
+} from './filtering';
+export type { ComparableKind, FilterColumnLike } from './filtering';
+
+// —— 汇总统计（纯函数：分组汇总 / 底部合计） ——
+export {
+  computeSummary,
+  hasSummaryCells,
+  resolveSummaryType,
+  summaryOptionsFor,
+  formatNumber,
+  SUMMARY_LABELS,
+  SUMMARY_SHORT_LABELS
+} from './aggregate';
+export type {
+  BitableSummaryType,
+  BitableSummaryCell,
+  BitableSummaryResult
+} from './aggregate';
+
+// —— 导出（纯函数：CSV / 最小 OOXML xlsx，零依赖） ——
+export {
+  buildCsv,
+  buildXlsx,
+  cellToText,
+  columnLetter,
+  crc32,
+  downloadBlob,
+  exportRows
+} from './exportTable';
+export type { ExportColumn, ExportFormat } from './exportTable';
+
 // —— 主视图容器（内部按 viewType 分发到 6 种视图） ——
 export { BitableTable } from './BitableTable';
 
@@ -64,6 +105,32 @@ export { BitableToolbar } from './BitableToolbar';
 
 // —— 单元格编辑器 ——
 export { EditableCell } from './EditableCell';
+
+// —— 导入：Excel / CSV → 多维表 ——
+export { BitableImportDialog } from './BitableImportDialog';
+export type { BitableImportPayload, BitableImportMode } from './BitableImportDialog';
+export {
+  parseSpreadsheetFile,
+  parseXlsx,
+  parseDelimited,
+  detectDelimiter,
+  decodeSpreadsheetBuffer,
+  normalizeMatrix,
+  inferColumnType,
+  normalizeDateText,
+  parseNumberText,
+  parseBooleanText,
+  buildImportResult,
+  DEFAULT_MAX_IMPORT_ROWS,
+  DEFAULT_MAX_IMPORT_BYTES
+} from './spreadsheet';
+export type {
+  ParsedSheet,
+  ParsedWorkbook,
+  InferredField,
+  ImportBuildOptions,
+  ImportResult
+} from './spreadsheet';
 
 // —— 配置弹层 ——
 export { BitableFieldConfigPopover } from './BitableFieldConfigPopover';

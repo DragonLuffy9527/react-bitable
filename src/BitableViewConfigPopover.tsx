@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { BitableColumnConfig, BitableViewConfig, BitableViewScope } from './types';
+import { SUMMARY_LABELS, summaryOptionsFor } from './aggregate';
+import type { BitableSummaryType } from './aggregate';
 
 interface BitableViewConfigPopoverProps {
   activeView: BitableViewConfig;
@@ -85,6 +87,9 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
   const selCls =
     'flex-1 max-w-[220px] h-7 px-2 text-[11.5px] bg-white border border-slate-200 rounded-md hover:border-slate-300 focus:outline-none focus:border-[#005BAC] cursor-pointer';
   const fieldOptions = columns.filter((c) => c.type !== 'action');
+  const dateFieldOptions = columns.filter((c) => c.type === 'date');
+  // 汇总只对可计算的字段有意义：数字列能求和，日期列能取最大/最小
+  const summaryColumns = columns.filter((c) => c.type === 'number' || c.type === 'date');
 
   const handleRenameSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -400,23 +405,38 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
           {currentViewType === 'gantt' && (
             <div className="space-y-1">
               <label className="flex items-center justify-between gap-2">
-                <span className="text-[11px] text-slate-600 shrink-0">阶段/版次字段</span>
+                <span className="text-[11px] text-slate-600 shrink-0">开始日期字段</span>
                 <select
-                  value={activeView.ganttStageFieldId || ''}
-                  onChange={(e) => onUpdateViewConfig?.({ ganttStageFieldId: e.target.value || null })}
+                  value={activeView.ganttStartFieldId || ''}
+                  onChange={(e) => onUpdateViewConfig?.({ ganttStartFieldId: e.target.value || null })}
                   className={selCls}
                 >
-                  <option value="">默认版次五阶段（REV-00 ~ 04）</option>
-                  {fieldOptions.map((c) => (
+                  <option value="">自动识别（含「开始」的日期字段）</option>
+                  {dateFieldOptions.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.label}
-                      {c.options && c.options.length > 0 ? `（${c.options.length} 阶段）` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-slate-600 shrink-0">结束日期字段</span>
+                <select
+                  value={activeView.ganttEndFieldId || ''}
+                  onChange={(e) => onUpdateViewConfig?.({ ganttEndFieldId: e.target.value || null })}
+                  className={selCls}
+                >
+                  <option value="">自动识别（含「截止/结束」的日期字段）</option>
+                  {dateFieldOptions.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
                     </option>
                   ))}
                 </select>
               </label>
               <div className="text-[10px] text-slate-400 leading-relaxed">
-                单选字段的每个选项成为一条阶段列；文本字段按出现值自动分列（≤6 列）。
+                按开始/结束日期铺出真实时间轴。可直接拖动色条整体改期，拖右边缘改结束日；
+                只填了一端的记录按单日任务显示。
               </div>
             </div>
           )}
@@ -608,6 +628,56 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
                     }`}
                   />
                 </button>
+              </div>
+            </div>
+          )}
+          {/* —— 汇总：分组汇总 / 底部合计 —— */}
+          {currentViewType === 'grid' && summaryColumns.length > 0 && (
+            <div className="space-y-1.5 pt-2 mt-0.5 border-t border-dashed border-slate-200">
+              <div className="flex items-center justify-between">
+                <div className="text-[11px] font-semibold text-slate-600">汇总方式</div>
+                {Object.keys(activeView.summaryRules || {}).length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => onUpdateViewConfig?.({ summaryRules: {} })}
+                    className="text-[10px] text-slate-400 hover:text-red-600 transition-colors cursor-pointer"
+                  >
+                    重置
+                  </button>
+                )}
+              </div>
+              <div className="space-y-1">
+                {summaryColumns.map((col) => {
+                  const value = activeView.summaryRules?.[col.id] ?? '';
+                  return (
+                    <div key={col.id} className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] text-slate-600 truncate min-w-0">{col.label}</span>
+                      <select
+                        value={value}
+                        onChange={(e) => {
+                          const next = { ...(activeView.summaryRules || {}) };
+                          const picked = e.target.value;
+                          if (picked) next[col.id] = picked as BitableSummaryType;
+                          else delete next[col.id];
+                          onUpdateViewConfig?.({ summaryRules: next });
+                        }}
+                        className={`${selCls} shrink-0`}
+                      >
+                        <option value="">自动</option>
+                        {summaryOptionsFor(col.type)
+                          .filter((t) => t !== 'none')
+                          .map((t) => (
+                            <option key={t} value={t}>
+                              {SUMMARY_LABELS[t]}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="text-[10px] text-slate-400 leading-relaxed">
+                分组时数字列默认「求和」，组尾显示汇总行；未分组时只有显式配置才会出现底部合计行。
               </div>
             </div>
           )}

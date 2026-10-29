@@ -1,6 +1,23 @@
 import type { BitableSelectOption } from './types';
 
 /**
+ * 单选项配色盘。文本列改成单选时，按现有数据的去重值自动建选项并依次取色，
+ * 这样「改成单选」立刻就能看到每种状态各自的底色，不用手填一遍选项。
+ * 与 BitableFieldConfigPopover.parseSelectOptions 用同一套色阶，保持一致观感。
+ *
+ * 放在这里而不是 useBitable，是为了让 spreadsheet.ts 这类纯函数模块
+ * 能直接引用，而不必 import 一个带 React 状态的 hook 文件。
+ */
+export const SELECT_OPTION_PALETTE = [
+  'bg-blue-50 text-[#005BAC] border-blue-200',
+  'bg-emerald-50 text-emerald-700 border-emerald-200',
+  'bg-purple-50 text-purple-700 border-purple-200',
+  'bg-amber-50 text-amber-700 border-amber-200',
+  'bg-cyan-50 text-cyan-700 border-cyan-200',
+  'bg-rose-50 text-rose-700 border-rose-200'
+];
+
+/**
  * 多值字段（多选 / 人员 / 群组）的取值归一化。
  *
  * 统一把单元格原始值转成「字符串数组」，供 EditableCell（表格行内）、

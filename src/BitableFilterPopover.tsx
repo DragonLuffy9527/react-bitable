@@ -1,5 +1,34 @@
 import React from 'react';
 import { BitableColumnConfig, BitableFilterRule, FilterOperator } from './types';
+import { ComparableKind, operatorsFor, resolveComparableKind } from './filtering';
+
+const OPERATOR_LABELS: Record<FilterOperator, string> = {
+  contains: '包含',
+  not_contains: '不包含',
+  equals: '等于',
+  not_equals: '不等于',
+  starts_with: '开头是',
+  is_empty: '为空',
+  is_not_empty: '不为空',
+  gt: '大于',
+  gte: '大于等于',
+  lt: '小于',
+  lte: '小于等于',
+  between: '介于'
+};
+
+const VALUE_PLACEHOLDER: Record<ComparableKind, string> = {
+  text: '输入关键词...',
+  number: '数值，如 100',
+  date: '日期，如 2026-10-08'
+};
+
+/** 切换字段后原操作符可能不再适用（比如从数字列切到文本列却还选着「大于」） */
+function pickOperator(current: FilterOperator, kind: ComparableKind): FilterOperator {
+  const allowed = operatorsFor(kind);
+  if (allowed.includes(current)) return current;
+  return kind === 'text' ? 'contains' : 'equals';
+}
 
 interface BitableFilterPopoverProps<T> {
   columns: BitableColumnConfig<T>[];
@@ -24,14 +53,20 @@ export const BitableFilterPopover = <T,>({
   const filterableColumns = columns.filter((c) => c.type !== 'action');
 
   const handleAddRule = () => {
-    const firstCol = filterableColumns[0]?.id || '';
+    const firstCol = filterableColumns[0];
     const newRule: BitableFilterRule = {
       id: `rule_${Date.now()}`,
-      fieldId: firstCol,
-      operator: 'contains',
+      fieldId: firstCol?.id || '',
+      operator: pickOperator('contains', resolveComparableKind(firstCol?.type)),
       value: ''
     };
     onUpdateRules([...filterRules, newRule]);
+  };
+
+  /** 换字段时顺手把不适用的操作符换成默认值，避免出现「数字列 大于 abc」这种死条件 */
+  const handleChangeField = (rule: BitableFilterRule, fieldId: string) => {
+    const kind = resolveComparableKind(filterableColumns.find((c) => c.id === fieldId)?.type);
+    handleChangeRule(rule.id, { fieldId, operator: pickOperator(rule.operator, kind) });
   };
 
   const handleRemoveRule = (id: string) => {
@@ -54,7 +89,7 @@ export const BitableFilterPopover = <T,>({
   };
 
   return (
-    <div className="absolute left-0 top-full mt-1.5 w-[440px] max-w-[calc(100vw-32px)] bg-white border border-slate-200 rounded-lg shadow-xl z-50 p-3 select-none text-slate-800 text-[12px] overflow-hidden">
+    <div className="absolute left-0 top-full mt-1.5 w-[520px] max-w-[calc(100vw-32px)] bg-white border border-slate-200 rounded-lg shadow-xl z-50 p-3 select-none text-slate-800 text-[12px] overflow-hidden">
       <div className="flex items-center justify-between pb-2 border-b border-slate-100">
         <div className="flex items-center gap-1.5 font-semibold text-slate-900">
           <span className="material-symbols-outlined text-[16px] text-slate-500">filter_alt</span>
@@ -91,7 +126,13 @@ export const BitableFilterPopover = <T,>({
           </div>
         ) : (
           <div className="space-y-2 max-h-[60vh] overflow-y-auto overflow-x-hidden pr-0.5">
-            {filterRules.map((rule, idx) => (
+            {filterRules.map((rule, idx) => {
+              const kind = resolveComparableKind(filterableColumns.find((c) => c.id === rule.fieldId)?.type);
+              const operators = operatorsFor(kind);
+              const showValue = !['is_empty', 'is_not_empty'].includes(rule.operator);
+              const isBetween = rule.operator === 'between';
+
+              return (
               <div key={rule.id} className="flex items-center gap-1.5 bg-slate-50 p-1.5 rounded border border-slate-200">
                 {/* Logic connector */}
                 {idx === 0 ? (
@@ -116,7 +157,7 @@ export const BitableFilterPopover = <T,>({
                 {/* Field selector */}
                 <select
                   value={rule.fieldId}
-                  onChange={(e) => handleChangeRule(rule.id, { fieldId: e.target.value })}
+                  onChange={(e) => handleChangeField(rule, e.target.value)}
                   className="h-6 px-1.5 text-[11px] bg-white border border-slate-200 rounded text-slate-700 focus:outline-none shrink-0 max-w-[110px]"
                 >
                   {filterableColumns.map((c) => (
@@ -126,31 +167,48 @@ export const BitableFilterPopover = <T,>({
                   ))}
                 </select>
 
-                {/* Operator selector */}
+                {/* Operator selector — 选项随列类型变化 */}
                 <select
                   value={rule.operator}
                   onChange={(e) => handleChangeRule(rule.id, { operator: e.target.value as FilterOperator })}
                   className="h-6 px-1 text-[11px] bg-white border border-slate-200 rounded text-slate-700 focus:outline-none shrink-0"
                 >
-                  <option value="contains">包含</option>
-                  <option value="not_contains">不包含</option>
-                  <option value="equals">等于</option>
-                  <option value="not_equals">不等于</option>
-                  <option value="starts_with">开头是</option>
-                  <option value="is_empty">为空</option>
-                  <option value="is_not_empty">不为空</option>
+                  {operators.map((op) => (
+                    <option key={op} value={op}>
+                      {OPERATOR_LABELS[op]}
+                    </option>
+                  ))}
                 </select>
 
-                {/* Value Input */}
-                {!['is_empty', 'is_not_empty'].includes(rule.operator) && (
-                  <input
-                    type="text"
-                    value={rule.value}
-                    onChange={(e) => handleChangeRule(rule.id, { value: e.target.value })}
-                    placeholder="输入关键词..."
-                    className="flex-1 min-w-0 h-6 px-2 text-[11px] bg-white border border-slate-200 rounded text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#005BAC]"
-                  />
-                )}
+                {/* Value Input — between 需要上下界两个框 */}
+                {showValue &&
+                  (isBetween ? (
+                    <div className="flex items-center gap-1 flex-1 min-w-0">
+                      <input
+                        type="text"
+                        value={rule.value}
+                        onChange={(e) => handleChangeRule(rule.id, { value: e.target.value })}
+                        placeholder={VALUE_PLACEHOLDER[kind]}
+                        className="flex-1 min-w-0 h-6 px-2 text-[11px] bg-white border border-slate-200 rounded text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#005BAC]"
+                      />
+                      <span className="text-[11px] text-slate-400 shrink-0">~</span>
+                      <input
+                        type="text"
+                        value={rule.value2 ?? ''}
+                        onChange={(e) => handleChangeRule(rule.id, { value2: e.target.value })}
+                        placeholder={VALUE_PLACEHOLDER[kind]}
+                        className="flex-1 min-w-0 h-6 px-2 text-[11px] bg-white border border-slate-200 rounded text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#005BAC]"
+                      />
+                    </div>
+                  ) : (
+                    <input
+                      type="text"
+                      value={rule.value}
+                      onChange={(e) => handleChangeRule(rule.id, { value: e.target.value })}
+                      placeholder={VALUE_PLACEHOLDER[kind]}
+                      className="flex-1 min-w-0 h-6 px-2 text-[11px] bg-white border border-slate-200 rounded text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#005BAC]"
+                    />
+                  ))}
 
                 {/* Delete button */}
                 <button
@@ -162,7 +220,8 @@ export const BitableFilterPopover = <T,>({
                   <span className="material-symbols-outlined text-[15px]">delete</span>
                 </button>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

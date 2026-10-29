@@ -3,6 +3,7 @@ import {
   BitableTable,
   BitableToolbar,
   BitableViewTabs,
+  BitableImportDialog,
   useBitable,
   type BitableColorRule,
   type BitableFilterRule,
@@ -13,6 +14,7 @@ import { defaultColumns, initialTasks, presetViews, type TaskRow } from './fixtu
 
 export function DemoApp() {
   const [toast, setToast] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const toastTimer = useRef<number | null>(null);
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -28,6 +30,7 @@ export function DemoApp() {
     views,
     activeView,
     activeViewId,
+    processedData,
     isMasterView,
     collapsedGroups,
     toggleGroupCollapse,
@@ -58,6 +61,7 @@ export function DemoApp() {
     setDensity,
     setColorRules,
     updateCell,
+    updateCells,
     addRow,
     deleteRow,
     deleteRows,
@@ -67,7 +71,15 @@ export function DemoApp() {
     moveRow,
     resizeColumn,
     searchQuery,
-    setSearchQuery
+    setSearchQuery,
+    importTable,
+    exportView,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    undoLabel,
+    redoLabel
   } = useBitable<TaskRow>({
     storageKey: 'react-bitable-playground',
     initialData: initialTasks,
@@ -75,7 +87,9 @@ export function DemoApp() {
     presetViews,
     // 字段表结构版本号：改了 defaultColumns 的 id/类型后调大它，
     // 老浏览器里存的旧列配置会被重置
-    schemaVersion: 'demo-1'
+    schemaVersion: 'demo-1',
+    // 撤销 / 重做执行后的提示，接到自己的 toast
+    onHistoryToast: (message) => showToast(message)
   });
 
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
@@ -207,6 +221,21 @@ export function DemoApp() {
               totalViews={views.length}
               isMasterView={isMasterView}
               onAddRecord={handleAddRecord}
+              onImport={() => setImportOpen(true)}
+              onExport={(format) => {
+                exportView(format);
+                showToast(
+                  `已导出当前视图为 ${format.toUpperCase()}（${
+                    processedData.length
+                  } 条记录，仅可见列）`
+                );
+              }}
+              onUndo={undo}
+              onRedo={redo}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              undoLabel={undoLabel}
+              redoLabel={redoLabel}
               selectedRecordCount={selectedCount}
               onDeleteRecord={() => {
                 const ids = Object.keys(checkedIds).filter((id) => checkedIds[id]);
@@ -325,6 +354,24 @@ export function DemoApp() {
                 updateCell(rowId, fieldId, value);
                 showToast(`已保存：${colLabel(fieldId)} → ${value}`);
               }}
+              onUpdateCells={(updates, label) => {
+                updateCells(updates, label);
+                showToast(label ?? `已更新 ${updates.length} 格`);
+              }}
+              onCopyCells={(info) => {
+                showToast(`已复制 ${info.rows}×${info.columns} 个单元格，可直接粘贴到 Excel`);
+              }}
+              onSelectRows={(ids) => {
+                // Shift+点击的范围勾选：把勾选集整体替换为这批行
+                const next: Record<string, boolean> = {};
+                ids.forEach((id) => (next[id] = true));
+                setCheckedIds(next);
+                showToast(`已选中 ${ids.length} 行`);
+              }}
+              onCreateRow={(values) => {
+                addRow(values as Partial<TaskRow>);
+                showToast('表单已提交，新增 1 条记录');
+              }}
               onDeleteRow={(rowId) => {
                 deleteRow(rowId);
                 showToast('已删除记录');
@@ -362,6 +409,27 @@ export function DemoApp() {
           交互提示：表头可拖拽换列 / 拖右边线改列宽；行号悬停可删除；行首方格可拖拽建立父子记录；右键行可插入复制。
         </p>
       </main>
+
+      {importOpen && (
+        <BitableImportDialog<TaskRow>
+          open={importOpen}
+          onClose={() => setImportOpen(false)}
+          existingColumns={columns}
+          onImport={({ mode, columns: importedColumns, rows, sheetName }) => {
+            const res = importTable({
+              columns: importedColumns,
+              rows: rows as TaskRow[],
+              mode
+            });
+            setCheckedIds({});
+            showToast(
+              mode === 'append'
+                ? `已从「${sheetName}」追加 ${res.rows} 条记录`
+                : `已导入「${sheetName}」：${res.columns} 个字段 / ${res.rows} 条记录`
+            );
+          }}
+        />
+      )}
 
       {toast && (
         <div className="pointer-events-none fixed bottom-6 left-1/2 z-[9999] -translate-x-1/2 rounded-md bg-slate-900/90 px-3.5 py-2 text-[12.5px] font-medium text-white shadow-lg">

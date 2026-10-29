@@ -23,18 +23,16 @@ import { toValueList } from './cellValue';
 const PARENT_FIELD_ID = 'parentRecordKey';
 
 /**
- * 单选项配色盘。文本列改成单选时，按现有数据的去重值自动建选项并依次取色，
- * 这样「改成单选」立刻就能看到每种状态各自的底色，不用手填一遍选项。
- * 与 BitableFieldConfigPopover.parseSelectOptions 用同一套色阶，保持一致观感。
+ * 单选项配色盘。定义已下沉到 cellValue.ts（纯函数模块），
+ * 这里 import 后重新导出，既保持既有 import 路径不变，
+ * 也让本文件内部的取色逻辑能直接用。
  */
-export const SELECT_OPTION_PALETTE = [
-  'bg-blue-50 text-[#005BAC] border-blue-200',
-  'bg-emerald-50 text-emerald-700 border-emerald-200',
-  'bg-purple-50 text-purple-700 border-purple-200',
-  'bg-amber-50 text-amber-700 border-amber-200',
-  'bg-cyan-50 text-cyan-700 border-cyan-200',
-  'bg-rose-50 text-rose-700 border-rose-200'
-];
+import { SELECT_OPTION_PALETTE } from './cellValue';
+export { SELECT_OPTION_PALETTE };
+import { applyFilterRules } from './filtering';
+import { computeSummary } from './aggregate';
+import { exportRows } from './exportTable';
+import type { ExportFormat } from './exportTable';
 
 interface UseBitableOptions<T> {
   storageKey: string;
@@ -917,6 +915,117 @@ export function useBitable<T extends { id: string }>({
     setColumns(defaultColumns);
   };
 
+  /**
+   * 把「上传 Excel」的解析结果落成一张多维表。
+   *
+   * 两种模式：
+   * - `replace`：字段与记录整体替换。**必须同时重置所有视图里引用旧字段的配置**
+   *   （筛选/排序/分组/染色/隐藏列/卡片字段），否则那些规则指向已不存在的 fieldId，
+   *   轻则筛选把所有行滤空、重则看板分不出泳道。
+   * - `append`：按表头把新列并入已有字段（同名复用、异名新增），只追加记录，
+   *   已有字段的 id、类型、染色规则都不动，适合「每月导入一批新台账」。
+   *
+   * 两种模式都只产生**一步撤销**，用户误导入时 Ctrl+Z 能整体退回。
+   */
+  const importTable = ({
+    columns: incomingColumns,
+    rows: incomingRows,
+    mode = 'replace'
+  }: {
+    columns: BitableColumnConfig<T>[];
+    rows: T[];
+    mode?: 'replace' | 'append';
+  }): { columns: number; rows: number } => {
+    if (incomingColumns.length === 0) return { columns: 0, rows: 0 };
+
+    if (mode === 'append') {
+      markHistory('追加导入记录');
+      const byLabel = new Map<string, BitableColumnConfig<T>>();
+      for (const c of columns) byLabel.set(c.label.trim(), c);
+
+      const usedIds = new Set(columns.map((c) => c.id));
+      const mapping: Record<number, string> = {};
+      const nextColumns = [...columns];
+
+      incomingColumns.forEach((col, index) => {
+        const hit = byLabel.get(col.label.trim());
+        if (hit) {
+          mapping[index] = hit.id;
+          return;
+        }
+        let id = col.id;
+        if (usedIds.has(id)) {
+          let n = 2;
+          while (usedIds.has(`${id}_${n}`)) n += 1;
+          id = `${id}_${n}`;
+        }
+        usedIds.add(id);
+        mapping[index] = id;
+        nextColumns.push({ ...col, id });
+      });
+
+      const stamp = Date.now().toString(36);
+      const appended = incomingRows.map((row, rowIndex) => {
+        const out: Record<string, unknown> = { id: `imp_${stamp}_${rowIndex + 1}` };
+        incomingColumns.forEach((col, index) => {
+          out[mapping[index]] = (row as Record<string, unknown>)[col.id];
+        });
+        return out as T;
+      });
+
+      setColumns(nextColumns);
+      setData((prev) => [...appended, ...prev]);
+      return { columns: nextColumns.length, rows: appended.length };
+    }
+
+    markHistory('导入表格');
+    const fieldIds = incomingColumns.map((c) => c.id);
+    setColumns(incomingColumns);
+    setData(incomingRows);
+    setSearchQuery('');
+    // 视图保留（页签不消失），但所有依赖旧字段的配置清空
+    setViews((prev) =>
+      prev.map((view) => ({
+        ...view,
+        filterRules: [],
+        sortRules: [],
+        groupRules: [],
+        groupByFieldId: null,
+        colorRules: [],
+        hiddenFieldIds: [],
+        visibleColumnIds: fieldIds,
+        columnOrder: fieldIds,
+        parentChildEnabled: false,
+        parentFieldId: null,
+        kanbanFieldId: null,
+        galleryCoverFieldId: null,
+        ganttStageFieldId: null,
+        calendarDateFieldId: null,
+        cardTitleFieldId: null,
+        cardFields: [],
+        formFields: [],
+        formRequiredFields: []
+      }))
+    );
+    // 让增量并入逻辑认得这批新 id，避免宿主后续更新 initialData 时把它们再插一遍
+    incomingRows.forEach((row) => knownIdsRef.current.add(row.id));
+    return { columns: incomingColumns.length, rows: incomingRows.length };
+  };
+
+  /**
+   * 导出当前视图：导的是 processedData（筛选 + 排序后的结果），
+   * 列取当前视图可见列，因此「导出」和屏幕上看到的内容一致。
+   */
+  const exportView = (format: ExportFormat = 'xlsx', filename?: string) => {
+    const exportColumns = viewColumns
+      .filter((c) => c.visible && c.type !== 'action')
+      .map((c) => ({ id: c.id, label: c.label, type: c.type }));
+    if (exportColumns.length === 0) return;
+    // 文件名去掉路径分隔符等非法字符，避免浏览器静默改名
+    const safeName = (filename || activeView.name || '多维表').replace(/[\\/:*?"<>|]/g, '_');
+    exportRows(processedData as unknown as Record<string, unknown>[], exportColumns, format, safeName);
+  };
+
   const toggleColumnFreeze = (columnId: string) => {
     const col = columns.find((c) => c.id === columnId);
     markHistory(col ? (col.isFrozen ? '取消冻结字段' : '冻结字段') : '调整字段冻结');
@@ -1009,9 +1118,10 @@ export function useBitable<T extends { id: string }>({
    * 一次 setData 合并所有行，撤销时是**一步**；逐格调 updateCell 会变成 N 步，
    * 用户要按 N 次 Ctrl+Z 才能退回去，所以填充必须走这里。
    */
-  const updateCells = (updates: { rowId: string; fieldId: string; value: any }[]) => {
+  const updateCells = (updates: { rowId: string; fieldId: string; value: any }[], label?: string) => {
     if (updates.length === 0) return;
-    markHistory(`填充 ${updates.length} 行`);
+    // label 用于区分「拖拽填充」与「甘特改期」等不同来源，撤销提示才说得清做了什么
+    markHistory(label ?? `填充 ${updates.length} 行`);
     const patchByRow = new Map<string, Record<string, any>>();
     updates.forEach(({ rowId, fieldId, value }) => {
       const patch = patchByRow.get(rowId) || {};
@@ -1321,40 +1431,9 @@ export function useBitable<T extends { id: string }>({
       });
     }
 
-    // (1) Filter
+    // (1) Filter — 求值口径见 filtering.ts（数字/日期按大小比较，其余按文本匹配）
     if (activeView.filterRules.length > 0) {
-      result = result.filter((row) => {
-        const matches = activeView.filterRules.map((rule) => {
-          const val = (row as any)[rule.fieldId];
-          const strVal = val !== undefined && val !== null ? String(val).toLowerCase() : '';
-          const targetVal = rule.value.toLowerCase().trim();
-
-          switch (rule.operator) {
-            case 'contains':
-              return strVal.includes(targetVal);
-            case 'not_contains':
-              return !strVal.includes(targetVal);
-            case 'equals':
-              return strVal === targetVal;
-            case 'not_equals':
-              return strVal !== targetVal;
-            case 'starts_with':
-              return strVal.startsWith(targetVal);
-            case 'is_empty':
-              return strVal === '';
-            case 'is_not_empty':
-              return strVal !== '';
-            default:
-              return true;
-          }
-        });
-
-        if (activeView.filterLogic === 'AND') {
-          return matches.every(Boolean);
-        } else {
-          return matches.some(Boolean);
-        }
-      });
+      result = applyFilterRules(result, activeView.filterRules, activeView.filterLogic, columns);
     }
 
     // (2) Sort
@@ -1382,7 +1461,7 @@ export function useBitable<T extends { id: string }>({
     }
 
     return result;
-  }, [data, searchQuery, activeView.filterRules, activeView.filterLogic, activeView.sortRules]);
+  }, [data, columns, searchQuery, activeView.filterRules, activeView.filterLogic, activeView.sortRules]);
 
   // (3) Multi-level Hierarchical Grouping
   const groupedData = useMemo<BitableGroupSection<T>[]>(() => {
@@ -1405,7 +1484,9 @@ export function useBitable<T extends { id: string }>({
           level: 0,
           direction: 'asc',
           items: processedData,
-          isLeaf: true
+          isLeaf: true,
+          // 未分组时不自动求和，只有用户显式配了汇总规则才出底部合计行
+          summary: computeSummary(processedData as Record<string, unknown>[], columns, activeView.summaryRules, false)
         }
       ];
     }
@@ -1466,7 +1547,9 @@ export function useBitable<T extends { id: string }>({
           level: currentLevel,
           direction,
           items: subItems,
-          isLeaf
+          isLeaf,
+          // 分组状态下数字列默认求和；非叶子分组汇总的是全部后代记录
+          summary: computeSummary(subItems as Record<string, unknown>[], columns, activeView.summaryRules, true)
         });
 
         if (!isLeaf) {
@@ -1484,7 +1567,7 @@ export function useBitable<T extends { id: string }>({
     }
 
     return groupRecursively(processedData, 0, undefined, 0);
-  }, [processedData, activeView.groupRules, activeView.groupByFieldId, columns]);
+  }, [processedData, activeView.groupRules, activeView.groupByFieldId, activeView.summaryRules, columns]);
 
   // 13. Group Collapse State & Operations
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
@@ -1568,6 +1651,10 @@ export function useBitable<T extends { id: string }>({
     setColorRules,
     updateCell,
     updateCells,
+    /** 导入 Excel / CSV：replace 整表替换、append 追加记录，均只产生一步撤销 */
+    importTable,
+    /** 导出当前视图（筛选/排序后的结果、仅可见列）为 xlsx 或 csv */
+    exportView,
     undo,
     redo,
     canUndo,
