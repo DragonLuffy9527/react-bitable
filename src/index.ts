@@ -93,6 +93,23 @@ export type { ExportColumn, ExportFormat } from './exportTable';
 export { parseClipboardMatrix, coercePastedValue, buildPastePlan } from './clipboard';
 export type { PasteUpdate, PastePlan, PasteColumnLike } from './clipboard';
 
+// —— 数据源适配层（REST / 内存 / 自定义） ——
+export {
+  createRestDataSource,
+  createMemoryDataSource,
+  createSyncQueue,
+  diffRows,
+  snapshotRows
+} from './dataSource';
+export type {
+  BitableDataSource,
+  BitableSyncState,
+  BitableSyncStatus,
+  BitableRowPatch,
+  RowDiff,
+  SyncQueue
+} from './dataSource';
+
 // —— 主视图容器（内部按 viewType 分发到 6 种视图） ——
 export { BitableTable } from './BitableTable';
 

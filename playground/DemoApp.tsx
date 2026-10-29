@@ -4,6 +4,7 @@ import {
   BitableToolbar,
   BitableViewTabs,
   BitableImportDialog,
+  createMemoryDataSource,
   useBitable,
   type BitableColorRule,
   type BitableFilterRule,
@@ -14,6 +15,11 @@ import { defaultColumns, initialTasks, presetViews, type TaskRow } from './fixtu
 
 export function DemoApp() {
   const [toast, setToast] = useState<string | null>(null);
+  // 模拟后端：默认不接，点工具栏「接入模拟后端」才启用（把当前数据当作服务端已有数据）
+  const [backendOn, setBackendOn] = useState(false);
+  const backendRef = useRef<ReturnType<typeof createMemoryDataSource<TaskRow>> | null>(null);
+  const dataRef = useRef<TaskRow[]>([]);
+  const dataSource = backendOn ? backendRef.current ?? undefined : undefined;
   const [importOpen, setImportOpen] = useState(false);
   const toastTimer = useRef<number | null>(null);
   const showToast = useCallback((message: string) => {
@@ -79,7 +85,10 @@ export function DemoApp() {
     canUndo,
     canRedo,
     undoLabel,
-    redoLabel
+    redoLabel,
+    syncState,
+    reloadFromSource,
+    flushSync
   } = useBitable<TaskRow>({
     storageKey: 'react-bitable-playground',
     initialData: initialTasks,
@@ -89,8 +98,109 @@ export function DemoApp() {
     // 老浏览器里存的旧列配置会被重置
     schemaVersion: 'demo-1',
     // 撤销 / 重做执行后的提示，接到自己的 toast
-    onHistoryToast: (message) => showToast(message)
+    onHistoryToast: (message) => showToast(message),
+    // 数据源适配层：传了才同步，不传就是纯本地
+    dataSource,
+    onSyncStateChange: (state) => {
+      if (state.status === 'error') showToast(`同步失败：${state.error}（可点重试）`);
+    }
   });
+
+  // 记住最新数据：接入模拟后端时把「当前已有的数据」当作服务端数据，
+  // 否则启用同步会立刻用空库覆盖本地内容
+  dataRef.current = data;
+
+  const toggleBackend = () => {
+    if (backendOn) {
+      backendRef.current = null;
+      setBackendOn(false);
+      showToast('已断开模拟后端，回到纯本地模式');
+      return;
+    }
+    backendRef.current = createMemoryDataSource<TaskRow>(dataRef.current, { latency: 260 });
+    setBackendOn(true);
+    showToast('已接入模拟后端（260ms 延迟）：之后的改动会同步过去');
+  };
+
+  const syncTone =
+    syncState.status === 'error'
+      ? 'bg-rose-50 text-rose-700 border-rose-200'
+      : syncState.status === 'loading'
+      ? 'bg-sky-50 text-sky-700 border-sky-200'
+      : syncState.pending > 0
+      ? 'bg-amber-50 text-amber-700 border-amber-200'
+      : 'bg-emerald-50 text-emerald-700 border-emerald-200';
+  const syncLabel =
+    syncState.status === 'error'
+      ? '同步失败'
+      : syncState.status === 'loading'
+      ? '加载中…'
+      : syncState.pending > 0
+      ? `待同步 ${syncState.pending}`
+      : '已同步';
+  const syncIcon =
+    syncState.status === 'error'
+      ? 'cloud_off'
+      : syncState.status === 'loading' || syncState.pending > 0
+      ? 'cloud_sync'
+      : 'cloud_done';
+
+  /** 同步状态 + 模拟后端开关：挂在工具栏 extraActions 里 */
+  const syncActions = (
+              <div className="flex items-center gap-1.5">
+                {backendOn && (
+                  <>
+                    <span
+                      className={`h-7 px-2 flex items-center gap-1 rounded border text-[11.5px] font-medium ${syncTone}`}
+                      title={
+                        syncState.error
+                          ? syncState.error
+                          : syncState.lastSyncedAt
+                          ? `上次同步 ${new Date(syncState.lastSyncedAt).toLocaleTimeString()}`
+                          : '等待同步'
+                      }
+                    >
+                      <span className="material-symbols-outlined text-[14px] leading-none">
+                        {syncIcon}
+                      </span>
+                      <span>{syncLabel}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void reloadFromSource();
+                        showToast('已从模拟后端重新拉取（验证往返一致）');
+                      }}
+                      className="h-7 px-2 rounded border border-slate-200 bg-white hover:bg-slate-50 text-[11.5px] text-slate-600 cursor-pointer"
+                      title="从模拟后端重新拉取：能拉回来就说明写入确实落库了"
+                    >
+                      重新拉取
+                    </button>
+                    {syncState.status === 'error' && (
+                      <button
+                        type="button"
+                        onClick={() => void flushSync()}
+                        className="h-7 px-2 rounded border border-rose-200 bg-rose-50 hover:bg-rose-100 text-[11.5px] text-rose-700 cursor-pointer"
+                      >
+                        重试
+                      </button>
+                    )}
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={toggleBackend}
+                  className={`h-7 px-2 rounded border text-[11.5px] cursor-pointer ${
+                    backendOn
+                      ? 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
+                      : 'border-[#005BAC]/40 bg-blue-50/60 hover:bg-blue-50 text-[#005BAC] font-medium'
+                  }`}
+                  title="演示数据源适配层：启用后所有改动会经 diff + 防抖写进模拟后端"
+                >
+                  {backendOn ? '断开后端' : '接入模拟后端'}
+                </button>
+              </div>
+  );
 
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Record<string, boolean>>({});
@@ -321,6 +431,7 @@ export function DemoApp() {
               }}
               extraActions={
                 <div className="flex items-center gap-2">
+                  {syncActions}
                   <button
                     type="button"
                     data-hint="演示按钮"

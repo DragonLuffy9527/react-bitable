@@ -33,6 +33,8 @@ import { applyFilterRules } from './filtering';
 import { computeSummary } from './aggregate';
 import { exportRows } from './exportTable';
 import type { ExportFormat } from './exportTable';
+import { createSyncQueue } from './dataSource';
+import type { BitableDataSource, BitableSyncState, SyncQueue } from './dataSource';
 
 interface UseBitableOptions<T> {
   storageKey: string;
@@ -56,6 +58,17 @@ interface UseBitableOptions<T> {
     checkedIds: Record<string, boolean>;
     setCheckedIds: (next: Record<string, boolean>) => void;
   };
+  /**
+   * 数据源适配层（可选）。传了之后：
+   * 1. 挂载时 `loadRows()` 覆盖本地缓存（远端是权威）；
+   * 2. 之后每次数据变化做 diff + 防抖，批量写回后端。
+   * 不传时行为与纯本地版完全一致。
+   */
+  dataSource?: BitableDataSource<T>;
+  /** 同步防抖间隔（毫秒），默认 300；连续编辑会被合并成一批 */
+  syncDebounceMs?: number;
+  /** 同步状态变化回调，可用来弹「已同步 / 同步失败」提示 */
+  onSyncStateChange?: (state: BitableSyncState) => void;
 }
 
 /** 一步撤销的快照：只有三个数组引用，靠不可变更新的结构性共享复用内存 */
@@ -76,7 +89,10 @@ export function useBitable<T extends { id: string }>({
   onDataChange,
   schemaVersion,
   onHistoryToast,
-  selectionState
+  selectionState,
+  dataSource,
+  syncDebounceMs,
+  onSyncStateChange
 }: UseBitableOptions<T>) {
   /**
    * 1. Data state
@@ -123,6 +139,86 @@ export function useBitable<T extends { id: string }>({
   };
 
   const [data, setData] = useState<T[]>(loadData);
+
+  // —— 数据源同步（可选）：不传 dataSource 时下面这些全是空转 ——
+  const [syncState, setSyncState] = useState<BitableSyncState>({
+    status: dataSource ? 'loading' : 'idle',
+    pending: 0
+  });
+  const syncCbRef = useRef(onSyncStateChange);
+  syncCbRef.current = onSyncStateChange;
+  /** 首次加载成功前不推数据，否则会把 localStorage 里的旧数据当成「新增」全量发往后端 */
+  const syncReadyRef = useRef(false);
+  const syncQueueRef = useRef<SyncQueue<T> | null>(null);
+  const syncSourceRef = useRef<BitableDataSource<T> | null>(null);
+
+  if (dataSource && syncSourceRef.current !== dataSource) {
+    syncQueueRef.current?.dispose();
+    syncQueueRef.current = createSyncQueue<T>({
+      source: dataSource,
+      debounceMs: syncDebounceMs,
+      onStateChange: (next) => {
+        setSyncState(next);
+        syncCbRef.current?.(next);
+      }
+    });
+    syncSourceRef.current = dataSource;
+    syncReadyRef.current = false;
+  }
+
+  /** 从数据源重新拉取（首次加载 / 手动刷新都用它）。远端是权威，会覆盖本地缓存。 */
+  const reloadFromSource = useCallback(async () => {
+    const queue = syncQueueRef.current;
+    if (!dataSource || !queue) return;
+    // 加载期间先关掉推送：否则 storageKey 切换时的本地重置会被 diff 成「整表新增」
+    syncReadyRef.current = false;
+    setSyncState((prev) => ({ ...prev, status: 'loading', error: undefined }));
+    try {
+      const rows = await dataSource.loadRows();
+      // 先重置基线再写 data：否则接下来的 data 变更会被 diff 成「整表新增」
+      queue.reset(rows);
+      syncReadyRef.current = true;
+      setData(rows);
+      setSyncState({ status: 'ready', pending: 0, lastSyncedAt: Date.now() });
+    } catch (err) {
+      syncReadyRef.current = false;
+      setSyncState({
+        status: 'error',
+        pending: 0,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }, [dataSource]);
+
+  useEffect(() => {
+    if (!dataSource) {
+      // 断开数据源：状态回到 idle，队列里残留的防抖定时器也清掉
+      syncQueueRef.current?.dispose();
+      syncQueueRef.current = null;
+      syncSourceRef.current = null;
+      syncReadyRef.current = false;
+      setSyncState({ status: 'idle', pending: 0 });
+      return;
+    }
+    void reloadFromSource();
+  }, [dataSource, reloadFromSource, storageKey]);
+
+  /** 把最新快照推给同步队列：diff + 防抖，所有写入口（编辑/填充/粘贴/导入/撤销）自动覆盖 */
+  useEffect(() => {
+    if (!dataSource || !syncQueueRef.current || !syncReadyRef.current) return;
+    syncQueueRef.current.push(data);
+  }, [data, dataSource]);
+
+  /** 立刻把未同步的改动发出去（重试失败批次 / 页面卸载前） */
+  const flushSync = useCallback(() => syncQueueRef.current?.flush(), []);
+
+  useEffect(() => {
+    return () => {
+      syncQueueRef.current?.dispose();
+      syncQueueRef.current = null;
+      syncSourceRef.current = null;
+    };
+  }, []);
 
   /**
    * 3. 增量并入：上传归档 / 新增版本会在上层 state 里追加新行，
@@ -1655,6 +1751,13 @@ export function useBitable<T extends { id: string }>({
     importTable,
     /** 导出当前视图（筛选/排序后的结果、仅可见列）为 xlsx 或 csv */
     exportView,
+    // —— 数据源同步 ——
+    /** 同步状态：status / 未同步处数 / 错误信息 / 上次成功时间 */
+    syncState,
+    /** 从数据源重新拉取（远端覆盖本地） */
+    reloadFromSource,
+    /** 立刻把未同步的改动发出去（重试失败批次 / 页面卸载前） */
+    flushSync,
     undo,
     redo,
     canUndo,

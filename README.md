@@ -52,6 +52,7 @@
 | 导入表格 | 上传 `.xlsx` / `.csv` / `.tsv`，自动识别字段类型与单选项，可逐列改类型后替换或追加 |
 | 导出表格 | 导出当前视图（已筛选 / 排序后的记录、仅可见列）为 **.xlsx** 或 **.csv**，自研最小 OOXML 打包，不引 SheetJS |
 | 虚拟滚动 | 只渲染可视区附近的行（默认 >150 行触发），**平铺与分组一视同仁**，导入几万行也不卡 |
+| 数据源 | 可选 `dataSource` 接后端：挂载拉取 + **写后同步（diff + 防抖）**，自带 REST / 内存适配器；不传则纯本地 |
 | 持久化 | 数据、列、视图、当前视图、schema 版本全部落 `localStorage`，刷新不丢 |
 | SSR 安全 | 无 `localStorage` 环境自动降级为内存存储，不抛异常 |
 
@@ -359,6 +360,68 @@ const bt = useBitable<Task>({
 
 ---
 
+## 接后端（数据源适配层）
+
+默认只存 `localStorage`。传一个 `dataSource` 就能接自己的后端——**不传时行为与纯本地版完全一致**。
+
+```ts
+interface BitableDataSource<T> {
+  loadRows(): Promise<T[]>;                       // 必填
+  createRows?(rows: T[]): Promise<void>;
+  updateRows?(patches: { rowId: string; patch: Partial<T> }[]): Promise<void>;
+  deleteRows?(rowIds: string[]): Promise<void>;
+}
+```
+
+```tsx
+const { data, syncState, reloadFromSource, flushSync } = useBitable({
+  storageKey: 'orders',
+  initialData: [],
+  defaultColumns,
+  presetViews,
+  dataSource: createRestDataSource({ baseUrl: '/api/orders' }),
+  onSyncStateChange: (s) => s.status === 'error' && toast(`同步失败：${s.error}`)
+});
+```
+
+### 为什么是「写后同步 + 差分」而不是在每个操作里埋回调
+
+所有写入口——行内编辑、拖拽填充、粘贴、导入、批量删除、撤销重做——最终都落到同一个 `data` 快照上。与其在十几个 mutation 函数里逐个埋同步回调（漏一个就静默丢数据），不如**比对新旧快照**得出增量：
+
+- **自动覆盖全部写入口**，包括以后新增的；
+- patch **只带真正变化的字段**，后端可以按字段合并，避免「改一格却整行覆盖」冲掉别人的并发修改；
+- 连续编辑用 300ms 防抖合成一批，拖拽填充 20 格只发一次请求。
+
+### 失败不丢改动
+
+写失败时**基线停在旧值、最新快照保留**，`syncState.pending` 记录还有多少处没同步，调 `flushSync()` 重试同一批 diff。也可以接 `onSyncStateChange` 弹提示、显示重试按钮。
+
+| 状态 | 含义 |
+| --- | --- |
+| `loading` | 正在 `loadRows()`，此时不推送本地改动 |
+| `ready` + `pending: 0` | 已同步 |
+| `ready` + `pending: N` | 有 N 处改动还在防抖队列里 |
+| `error` | 上一次写入失败，`error` 是原因，`pending` 是待重试处数 |
+
+### 两个现成适配器
+
+```ts
+// REST：GET {baseUrl} / POST {baseUrl} / PATCH {baseUrl}/{id} / DELETE {baseUrl}/{id}
+createRestDataSource({ baseUrl: '/api/rows', headers: () => ({ Authorization: token }), mapRow })
+
+// 内存：演示、单测、离线队列的落点，可注入延迟与失败率
+createMemoryDataSource(seed, { latency: 300, failRate: 0.1 })
+```
+
+### 几条要知道的约定
+
+- **远端是权威**：`loadRows()` 会覆盖本地缓存，别指望它做合并（需要合并就在适配器里自己做）。
+- **只读数据源合法**：只实现 `loadRows` 即可，未实现的写入方法会被跳过而不是报错。
+- **列配置与视图仍存本地**：`dataSource` 只管行数据。字段定义、筛选、分组、染色这些视图配置目前还在 `localStorage`，多端共享需要另外接。
+- **`storageKey` 仍是缓存命名空间**：换账套时数据源也应该换（`dataSource` 变化会触发重新加载）。
+
+---
+
 ## 导入 Excel / CSV
 
 上传一个表格文件，直接变成一张多维表：自动识别字段类型、自动生成单选项、可逐列改类型后导入。
@@ -452,6 +515,9 @@ const { columns, rows } = buildImportResult(wb.sheets[0], { hasHeader: true });
 | `schemaVersion?` | `string` | 字段表结构版本号。改字段定义后调大它，旧列配置会重置 |
 | `onHistoryToast?` | `(message: string) => void` | 撤销 / 重做执行后的即时反馈，接到你自己的 toast |
 | `selectionState?` | `{ checkedIds, setCheckedIds }` | 把页面的勾选集注册进撤销历史，Excel 式多选可被 Ctrl+Z 撤销 |
+| `dataSource?` | `BitableDataSource<T>` | 数据源适配层。传了就挂载拉取 + 写后同步；不传纯本地 |
+| `syncDebounceMs?` | `number` | 同步防抖间隔，默认 300ms |
+| `onSyncStateChange?` | `(state) => void` | 同步状态变化，用来弹「已同步 / 失败重试」 |
 
 返回值按用途分五组：
 
@@ -476,6 +542,9 @@ updateCell, updateCells, addRow, deleteRow, deleteRows, insertRow, duplicateRow,
 importTable,  // 导入 Excel / CSV：{ columns, rows, mode: 'replace' | 'append' }
 exportView,   // 导出当前视图：exportView('xlsx' | 'csv', filename?)
 detachRow, moveRow
+
+// 数据源同步（未传 dataSource 时恒为 idle）
+syncState, reloadFromSource, flushSync
 
 // 撤销重做
 undo, redo, canUndo, canRedo, undoLabel, redoLabel
@@ -545,6 +614,8 @@ toggleGroupCollapse, toggleAllGroupsCollapse
 | `buildCsv` / `buildXlsx` / `exportRows` / `downloadBlob` | 导出：TSV/CSV 转义、最小 OOXML 打包、浏览器下载（SSR 下静默跳过） |
 | `cellToText` / `columnLetter` / `crc32` | 导出底层原子函数 |
 | `parseClipboardMatrix` / `coercePastedValue` / `buildPastePlan` | 粘贴：剪贴板 TSV → 矩阵 → 按列类型转换 → 落到具体 `{ rowId, fieldId, value }`，越界裁剪与锁定列跳过都在这里 |
+| `createRestDataSource` / `createMemoryDataSource` | 数据源适配器：REST 资源式接口 / 内存实现（可注入延迟与失败率） |
+| `createSyncQueue` / `diffRows` / `snapshotRows` | 同步引擎：快照差分（只带变化字段）+ 防抖批量写 + 失败保留待重试 |
 
 ### 字段类型
 
@@ -624,6 +695,7 @@ src/
 ├── aggregate.ts                 分组汇总：求和/平均/极值/计数（纯函数）
 ├── exportTable.ts               CSV / 最小 OOXML xlsx 导出（纯函数 + 下载入口）
 ├── clipboard.ts                 剪贴板 TSV 解析与粘贴计划（纯函数）
+├── dataSource.ts                数据源适配层：diff / 同步队列 / REST 与内存适配器
 ├── fillSeries.ts                拖拽填充计划（纯函数）
 ├── spreadsheet.ts               Excel / CSV 解析与字段类型推断（纯函数，零依赖）
 ├── BitableTable.tsx             主容器 + 表格视图 + 父子记录 + 拖拽
@@ -644,7 +716,7 @@ playground/                      demo（npm run dev）
 
 ## 已知限制
 
-- **仅客户端**：持久化走 `localStorage`，多标签页 / 多人协作需要自己接后端。SSR 下会自动降级为内存存储（可用但不持久）。
+- **行数据可接后端，列与视图仍在本机**：`dataSource` 只同步行；字段定义、筛选、分组、染色存在 `localStorage`，多端共享要另外接。多人协作还需要自己加冲突解决与实时推送。
 - **虚拟滚动开启时跨屏拖拽填充受限**：DOM 里没有渲染的行无法被拖到，需要目标行在可视区内。
 - **`any` 未收干净**：`BitableColumnConfig<T = any>` 等位置保留了 `any`，泛型收紧要逐步做。
 - **无测试**：仓库目前没有单元测试，靠 playground 手工回归（纯函数模块可单独 import 测，`filtering` / `aggregate` / `exportTable` 都已用临时脚本验过边界）。
@@ -664,7 +736,9 @@ playground/                      demo（npm run dev）
 - [x] Ctrl+V 粘贴（TSV → 多格批量写入，按列类型转换）
 - [x] 导出 CSV / XLSX（零依赖）
 - [x] 虚拟滚动（平铺与分组）
-- [ ] 数据源适配层（REST / Supabase）
+- [x] 数据源适配层（行级 CRUD + 写后同步 + REST / 内存适配器）
+- [ ] 列配置与视图同步到后端
+- [ ] 实时协作（WebSocket / Supabase Realtime）
 - [ ] Vitest + Testing Library 覆盖 hook 与筛选排序逻辑
 - [ ] 去掉 Google Fonts 依赖，改内置 SVG 图标
 
