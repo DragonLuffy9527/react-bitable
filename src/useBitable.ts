@@ -35,6 +35,8 @@ import { exportRows } from './exportTable';
 import type { ExportFormat } from './exportTable';
 import { createSyncQueue } from './dataSource';
 import type { BitableDataSource, BitableSyncState, SyncQueue } from './dataSource';
+import { applySchema, buildSchema, createSchemaSaver, mergeColumns, mergeViews } from './schema';
+import type { BitableSchemaSnapshot, SchemaSaver } from './schema';
 
 interface UseBitableOptions<T> {
   storageKey: string;
@@ -151,6 +153,19 @@ export function useBitable<T extends { id: string }>({
   const syncReadyRef = useRef(false);
   const syncQueueRef = useRef<SyncQueue<T> | null>(null);
   const syncSourceRef = useRef<BitableDataSource<T> | null>(null);
+  /** 表结构（列 + 视图）写回器；数据源没实现 saveSchema 时为 null */
+  const schemaSaverRef = useRef<SchemaSaver | null>(null);
+  /** 首次拉到远端 schema 之前不写回，否则会用本地默认列覆盖后端 */
+  const schemaReadyRef = useRef(false);
+  /**
+   * `defaultColumns` / `presetViews` 是调用方每次渲染新建的数组，放进 useCallback
+   * 依赖会让 reloadFromSource 每帧都变、进而反复拉数据。这里用 ref 取最新值，
+   * 既避免闭包过期（父组件异步算出来的默认列），又不制造依赖抖动。
+   */
+  const defaultsRef = useRef(defaultColumns);
+  defaultsRef.current = defaultColumns;
+  const presetsRef = useRef(presetViews);
+  presetsRef.current = presetViews;
 
   if (dataSource && syncSourceRef.current !== dataSource) {
     syncQueueRef.current?.dispose();
@@ -162,8 +177,22 @@ export function useBitable<T extends { id: string }>({
         syncCbRef.current?.(next);
       }
     });
+    schemaSaverRef.current?.dispose();
+    schemaSaverRef.current = dataSource.saveSchema
+      ? createSchemaSaver({
+          save: (schema) => dataSource.saveSchema!(schema),
+          debounceMs: (syncDebounceMs ?? 300) * 2,
+          onError: (err) =>
+            syncCbRef.current?.({
+              status: 'error',
+              pending: 0,
+              error: `字段配置保存失败：${err.message}`
+            })
+        })
+      : null;
     syncSourceRef.current = dataSource;
     syncReadyRef.current = false;
+    schemaReadyRef.current = false;
   }
 
   /** 从数据源重新拉取（首次加载 / 手动刷新都用它）。远端是权威，会覆盖本地缓存。 */
@@ -172,6 +201,7 @@ export function useBitable<T extends { id: string }>({
     if (!dataSource || !queue) return;
     // 加载期间先关掉推送：否则 storageKey 切换时的本地重置会被 diff 成「整表新增」
     syncReadyRef.current = false;
+    schemaReadyRef.current = false;
     setSyncState((prev) => ({ ...prev, status: 'loading', error: undefined }));
     try {
       const rows = await dataSource.loadRows();
@@ -179,24 +209,50 @@ export function useBitable<T extends { id: string }>({
       queue.reset(rows);
       syncReadyRef.current = true;
       setData(rows);
+
+      /**
+       * 表结构（列 + 视图）：远端有就用远端的，没有就保持本地/代码默认。
+       *
+       * 顺序很关键——必须先把 saver 的基线设成这份远端快照，再把 schemaReady 打开。
+       * 否则 setColumns 触发的保存 effect 会把「刚拉下来的内容」原样再写回去。
+       */
+      if (dataSource.loadSchema) {
+        const remote = await dataSource.loadSchema().catch(() => null);
+        if (remote && Array.isArray(remote.columns)) {
+          const resolved = applySchema<T>(remote, {
+            defaultColumns: defaultsRef.current,
+            presetViews: presetsRef.current,
+            schemaVersion
+          });
+          schemaSaverRef.current?.reset(remote);
+          setColumns(resolved.columns);
+          setViews(resolved.views);
+          setActiveViewId(resolved.activeViewId);
+        }
+      }
+      schemaReadyRef.current = true;
       setSyncState({ status: 'ready', pending: 0, lastSyncedAt: Date.now() });
     } catch (err) {
       syncReadyRef.current = false;
+      schemaReadyRef.current = false;
       setSyncState({
         status: 'error',
         pending: 0,
         error: err instanceof Error ? err.message : String(err)
       });
     }
-  }, [dataSource]);
+  }, [dataSource, schemaVersion]);
 
   useEffect(() => {
     if (!dataSource) {
       // 断开数据源：状态回到 idle，队列里残留的防抖定时器也清掉
       syncQueueRef.current?.dispose();
       syncQueueRef.current = null;
+      schemaSaverRef.current?.dispose();
+      schemaSaverRef.current = null;
       syncSourceRef.current = null;
       syncReadyRef.current = false;
+      schemaReadyRef.current = false;
       setSyncState({ status: 'idle', pending: 0 });
       return;
     }
@@ -209,8 +265,11 @@ export function useBitable<T extends { id: string }>({
     syncQueueRef.current.push(data);
   }, [data, dataSource]);
 
-  /** 立刻把未同步的改动发出去（重试失败批次 / 页面卸载前） */
-  const flushSync = useCallback(() => syncQueueRef.current?.flush(), []);
+  /** 立刻把未同步的改动发出去（重试失败批次 / 页面卸载前）；行数据与表结构一起推 */
+  const flushSync = useCallback(() => {
+    schemaSaverRef.current?.flush();
+    syncQueueRef.current?.flush();
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -239,10 +298,19 @@ export function useBitable<T extends { id: string }>({
   }, [initialData]);
 
   // 2. Custom & Active Columns
-  const loadColumns = (): BitableColumnConfig<T>[] => {
+  /** 用户删掉的默认列 id（代码升级时不要再补回来） */
+  const readDeletedColumnIds = (): Set<string> => {
     try {
       const savedDeleted = localStorage.getItem(`${storageKey}_deleted_col_ids`);
-      const deletedIds = new Set<string>(savedDeleted ? JSON.parse(savedDeleted) : []);
+      return new Set<string>(savedDeleted ? JSON.parse(savedDeleted) : []);
+    } catch {
+      return new Set<string>();
+    }
+  };
+
+  const loadColumns = (): BitableColumnConfig<T>[] => {
+    try {
+      const deletedIds = readDeletedColumnIds();
 
       const savedCols = localStorage.getItem(`${storageKey}_columns`);
       if (savedCols) {
@@ -255,63 +323,14 @@ export function useBitable<T extends { id: string }>({
 
         // 字段表结构升级：整体回落到代码定义的列（保留用户自定义列与删除记录）
         const savedSchema = localStorage.getItem(`${storageKey}_schema_version`);
-        if (schemaVersion && savedSchema !== schemaVersion) {
-          const customs = parsed.filter((c) => c.isCustom && !deletedIds.has(c.id));
-          return [...defaultColumns, ...customs];
-        }
+        const schemaStale = !!schemaVersion && savedSchema !== schemaVersion;
 
-        // Merge with code defaults: keep user renamed labels for editable/custom fields, while preserving code render functions and locking admin fields
-        const existingIds = new Set(parsed.map((c) => c.id));
-        const missingDefaults = defaultColumns.filter(
-          (d) => !existingIds.has(d.id) && !deletedIds.has(d.id)
-        );
-        const merged: BitableColumnConfig<T>[] = [
-          ...parsed
-            .filter(
-              (col) =>
-                !deletedIds.has(col.id) &&
-                // 代码侧已经删掉/替换掉的默认列（如被「图纸附件」替换的 actions）
-                // 不能再留着，否则 original 找不到 render，会渲染成一列空白
-                (col.isCustom || defaultColumns.some((d) => d.id === col.id))
-            )
-            .map((col) => {
-              const original = defaultColumns.find((d) => d.id === col.id);
-              // isLocked 只表达「管理员是否显式加锁」，editable 只表达「单元格是否可编辑」。
-              // 首次升级（无 _locked_col_ids）时只信代码默认，**不读** _columns 里的 isLocked——
-              // 那是旧版把 editable:false 推导出来的脏值，读了会立刻被写进新 key 永久固化。
-              const isLocked = lockedIds
-                ? lockedIds.has(col.id)
-                : (original?.isLocked ?? false);
-              const isEditable = original?.editable ?? true;
-              const isCustom = !!col.isCustom;
-              // 名称以已保存的 label 为准：改名入口只受显式锁定约束（见 renameColumn），
-              // 因此 localStorage 里的 label 一定是合法值，不再按 editable 回落到代码默认名。
-              const resolvedLabel = col.label || original?.label || '';
-              const resolvedType = col.type || original?.type || 'text';
-              // 用户把字段类型改掉后，代码里那份原类型专属的 render 必须失效——
-              // 否则展示层仍走旧外观（文本列改单选后单元格还是纯灰字、选项配色不生效），
-              // 而且编辑器和展示会各说各话。判断依据是「存下来的 type 与代码默认 type 不同」。
-              const typeChangedByUser = !!original && resolvedType !== original.type;
-
-              return {
-                ...original,
-                ...col,
-                label: resolvedLabel,
-                isLocked,
-                editable: isEditable,
-                type: resolvedType,
-                render: typeChangedByUser ? undefined : original?.render,
-                options: col.options || original?.options
-              };
-            }),
-          ...missingDefaults
-        ];
-        return merged;
+        return mergeColumns(parsed, { defaultColumns, deletedIds, lockedIds, schemaStale });
       }
     } catch {
       // ignore
     }
-    return defaultColumns;
+    return defaultColumns.filter((d) => !readDeletedColumnIds().has(d.id));
   };
 
   const [columns, setColumns] = useState<BitableColumnConfig<T>[]>(loadColumns);
@@ -331,68 +350,15 @@ export function useBitable<T extends { id: string }>({
       }
       const savedViews = localStorage.getItem(`${storageKey}_views`);
       if (savedViews) {
-        let parsed: BitableViewConfig[] = JSON.parse(savedViews);
+        const parsed: BitableViewConfig[] = JSON.parse(savedViews);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const masterPreset = presetViews[0];
-          if (masterPreset) {
-            // Find existing master tab or legacy names
-            const masterIdx = parsed.findIndex(
-              (v) =>
-                v.id === masterPreset.id ||
-                v.name === '总表' ||
-                v.name === '全部图纸总表' ||
-                v.name === '全部版本总表' ||
-                v.name === '全部 PS 文件'
-            );
-            if (masterIdx >= 0) {
-              const masterItem = { ...parsed[masterIdx], name: '总表', icon: 'grid_on' };
-              parsed.splice(masterIdx, 1);
-              parsed.unshift(masterItem);
-            } else {
-              parsed.unshift({ ...masterPreset, name: '总表', icon: 'grid_on' });
-            }
-          }
-          const normalized = parsed.map((v) => ({
-            ...v,
-            viewType: v.viewType || 'grid',
-            scope: v.scope || 'collaborative',
-            isLocked: !!v.isLocked,
-            hiddenFieldIds: Array.isArray(v.hiddenFieldIds) ? v.hiddenFieldIds : [],
-            groupRules:
-              v.groupRules && v.groupRules.length > 0
-                ? v.groupRules
-                : v.groupByFieldId
-                ? [{ id: 'rule-legacy', fieldId: v.groupByFieldId, direction: 'asc' as const }]
-                : []
-          }));
-          // 系统总表固定为协作视图，历史数据若被存成个人视图则强制纠回
-          if (normalized.length > 0) {
-            normalized[0] = { ...normalized[0], scope: 'collaborative' };
-          }
-          return normalized;
+          return mergeViews(parsed, presetViews);
         }
       }
     } catch {
       // ignore
     }
-    const presetNormalized = presetViews.map((v) => ({
-      ...v,
-      viewType: v.viewType || 'grid',
-      scope: v.scope || 'collaborative',
-      isLocked: !!v.isLocked,
-      hiddenFieldIds: Array.isArray(v.hiddenFieldIds) ? v.hiddenFieldIds : [],
-      groupRules:
-        v.groupRules && v.groupRules.length > 0
-          ? v.groupRules
-          : v.groupByFieldId
-          ? [{ id: 'rule-legacy', fieldId: v.groupByFieldId, direction: 'asc' as const }]
-          : []
-    }));
-    // 系统总表固定为协作视图
-    if (presetNormalized.length > 0) {
-      presetNormalized[0] = { ...presetNormalized[0], scope: 'collaborative' };
-    }
-    return presetNormalized;
+    return mergeViews(null, presetViews);
   };
 
   const [views, setViews] = useState<BitableViewConfig[]>(loadViews);
@@ -645,6 +611,29 @@ export function useBitable<T extends { id: string }>({
       // ignore
     }
   }, [activeViewId, storageKey]);
+
+  /**
+   * 表结构写回后端。
+   *
+   * 放在最后（localStorage 那几个 effect 之后）是有意的：storageKey 切换时
+   * 上面几个 effect 会把本地缓存灌回 state，那一步不该被当成「用户改了字段配置」。
+   * reloadFromSource 在开头就把 schemaReadyRef 关掉，所以这里的守卫能拦住它。
+   */
+  useEffect(() => {
+    const saver = schemaSaverRef.current;
+    if (!saver || !schemaReadyRef.current) return;
+    saver.push(
+      buildSchema<T>({
+        columns,
+        views,
+        activeViewId,
+        deletedColumnIds: Array.from(readDeletedColumnIds()),
+        schemaVersion
+      })
+    );
+    // readDeletedColumnIds 读的是 localStorage，不是响应式依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [columns, views, activeViewId, schemaVersion, storageKey]);
 
   // Update active view helper
   const updateActiveView = useCallback(

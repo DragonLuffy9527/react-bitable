@@ -110,6 +110,26 @@ export type {
   SyncQueue
 } from './dataSource';
 
+// —— 表结构（列 + 视图）的序列化与合并：接后端 schema 时复用同一套规则 ——
+export {
+  serializeColumns,
+  buildSchema,
+  mergeColumns,
+  mergeViews,
+  normalizeView,
+  normalizePresetViews,
+  applySchema,
+  createSchemaSaver
+} from './schema';
+export type {
+  BitableSchemaSnapshot,
+  MergeColumnsOptions,
+  ApplySchemaOptions,
+  ResolvedSchema,
+  SchemaSaver,
+  CreateSchemaSaverOptions
+} from './schema';
+
 // —— 主视图容器（内部按 viewType 分发到 6 种视图） ——
 export { BitableTable } from './BitableTable';
 

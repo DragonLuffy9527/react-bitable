@@ -9,6 +9,7 @@
  * 自动被覆盖，不需要逐个接线；代价是同步粒度是「一次数据快照」，
  * 所以用 300ms 防抖把连续操作合成一批。
  */
+import type { BitableSchemaSnapshot } from './schema';
 
 export type BitableSyncStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -35,6 +36,18 @@ export interface BitableDataSource<T> {
   createRows?(rows: T[]): Promise<void>;
   updateRows?(patches: BitableRowPatch<T>[]): Promise<void>;
   deleteRows?(rowIds: string[]): Promise<void>;
+  /**
+   * 表结构（列配置 + 视图）读写，可选。
+   *
+   * 不实现时列与视图只存在本机 localStorage——同一台机器刷新不丢，
+   * 换台机器/换个人看到的就是代码默认列。实现后结构以远端为准，
+   * 多人才能看到同一套字段与页签。
+   *
+   * 注意：远端返回的是「用户改动」，不是完整列配置。代码里的 render 回调、
+   * 类型专属外观不会（也不该）走网络，落回运行时状态时会按 id 合并。
+   */
+  loadSchema?(): Promise<BitableSchemaSnapshot | null>;
+  saveSchema?(schema: BitableSchemaSnapshot): Promise<void>;
 }
 
 export interface RowDiff<T> {
@@ -211,10 +224,14 @@ export function createSyncQueue<T extends { id: string }>(options: {
 /**
  * REST 适配器：约定最朴素的资源式接口，改后端时优先覆盖这层而不是改组件。
  *
- *   GET    {baseUrl}         → T[] 或 { data: T[] }
- *   POST   {baseUrl}         → body: T[]（批量新增）
- *   PATCH  {baseUrl}/{id}    → body: Partial<T>（逐行，只带变化的字段）
+ *   GET    {baseUrl}              → T[] 或 { data: T[] }
+ *   POST   {baseUrl}              → body: T[]（批量新增）
+ *   PATCH  {baseUrl}/{id}         → body: Partial<T>（逐行，只带变化的字段）
  *   DELETE {baseUrl}/{id}
+ *   GET    {schemaUrl}            → BitableSchemaSnapshot | null
+ *   PUT    {schemaUrl}            → body: BitableSchemaSnapshot（整份覆盖）
+ *
+ * 不传 schemaUrl 时不提供结构读写，列与视图继续只存本机。
  */
 export function createRestDataSource<T extends { id: string }>(options: {
   baseUrl: string;
@@ -222,8 +239,10 @@ export function createRestDataSource<T extends { id: string }>(options: {
   fetchImpl?: typeof fetch;
   /** 把后端返回的行映射成表格行（字段改名、扁平化嵌套时用） */
   mapRow?: (raw: unknown) => T;
+  /** 表结构读写地址；不传则不启用结构同步 */
+  schemaUrl?: string;
 }): BitableDataSource<T> {
-  const { baseUrl, headers, mapRow } = options;
+  const { baseUrl, headers, mapRow, schemaUrl } = options;
   const doFetch = options.fetchImpl ?? (typeof fetch !== 'undefined' ? fetch : undefined);
   if (!doFetch) throw new Error('createRestDataSource 需要 fetch：请在 options.fetchImpl 传入');
 
@@ -269,7 +288,21 @@ export function createRestDataSource<T extends { id: string }>(options: {
           request(`${baseUrl}/${encodeURIComponent(id)}`, { method: 'DELETE' })
         )
       );
-    }
+    },
+    ...(schemaUrl
+      ? {
+          async loadSchema() {
+            const payload = await request(schemaUrl);
+            if (!payload || typeof payload !== 'object') return null;
+            // 兼容 { data: schema } 的信封格式
+            const body = payload as { data?: BitableSchemaSnapshot } & BitableSchemaSnapshot;
+            return body.data && Array.isArray(body.data.columns) ? body.data : body;
+          },
+          async saveSchema(schema: BitableSchemaSnapshot) {
+            await request(schemaUrl, { method: 'PUT', body: JSON.stringify(schema) });
+          }
+        }
+      : {})
   };
 }
 
@@ -280,9 +313,11 @@ export function createRestDataSource<T extends { id: string }>(options: {
 export function createMemoryDataSource<T extends { id: string }>(
   seed: T[] = [],
   options: { latency?: number; failRate?: number } = {}
-): BitableDataSource<T> & { current(): T[] } {
+): BitableDataSource<T> & { current(): T[]; currentSchema(): BitableSchemaSnapshot | null } {
   const { latency = 0, failRate = 0 } = options;
   let rows: T[] = seed.map((r) => ({ ...r }));
+  /** 表结构也存一份，用来演示「换台机器还是同一套列」 */
+  let schema: BitableSchemaSnapshot | null = null;
 
   const wait = () =>
     new Promise<void>((resolve, reject) => {
@@ -292,6 +327,7 @@ export function createMemoryDataSource<T extends { id: string }>(
 
   return {
     current: () => rows.map((r) => ({ ...r })),
+    currentSchema: () => (schema ? JSON.parse(JSON.stringify(schema)) : null),
     async loadRows() {
       await wait();
       return rows.map((r) => ({ ...r }));
@@ -309,6 +345,14 @@ export function createMemoryDataSource<T extends { id: string }>(
       await wait();
       const drop = new Set(ids);
       rows = rows.filter((r) => !drop.has(r.id));
+    },
+    async loadSchema() {
+      await wait();
+      return schema ? JSON.parse(JSON.stringify(schema)) : null;
+    },
+    async saveSchema(next) {
+      await wait();
+      schema = JSON.parse(JSON.stringify(next));
     }
   };
 }

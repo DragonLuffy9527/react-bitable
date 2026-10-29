@@ -53,6 +53,7 @@
 | 导出表格 | 导出当前视图（已筛选 / 排序后的记录、仅可见列）为 **.xlsx** 或 **.csv**，自研最小 OOXML 打包，不引 SheetJS |
 | 虚拟滚动 | 只渲染可视区附近的行（默认 >150 行触发），**平铺与分组一视同仁**，导入几万行也不卡 |
 | 数据源 | 可选 `dataSource` 接后端：挂载拉取 + **写后同步（diff + 防抖）**，自带 REST / 内存适配器；不传则纯本地 |
+| 表结构同步 | 可选 `loadSchema` / `saveSchema`：列配置、页签、筛选、分组也能跟着账号走，`render` 等代码资产不走网络 |
 | 持久化 | 数据、列、视图、当前视图、schema 版本全部落 `localStorage`，刷新不丢 |
 | SSR 安全 | 无 `localStorage` 环境自动降级为内存存储，不抛异常 |
 
@@ -370,6 +371,8 @@ interface BitableDataSource<T> {
   createRows?(rows: T[]): Promise<void>;
   updateRows?(patches: { rowId: string; patch: Partial<T> }[]): Promise<void>;
   deleteRows?(rowIds: string[]): Promise<void>;
+  loadSchema?(): Promise<BitableSchemaSnapshot | null>;   // 表结构：列 + 视图
+  saveSchema?(schema: BitableSchemaSnapshot): Promise<void>;
 }
 ```
 
@@ -409,15 +412,42 @@ const { data, syncState, reloadFromSource, flushSync } = useBitable({
 // REST：GET {baseUrl} / POST {baseUrl} / PATCH {baseUrl}/{id} / DELETE {baseUrl}/{id}
 createRestDataSource({ baseUrl: '/api/rows', headers: () => ({ Authorization: token }), mapRow })
 
+// 传 schemaUrl 后额外提供 GET/PUT {schemaUrl} 读写表结构
+createRestDataSource({ baseUrl: '/api/rows', schemaUrl: '/api/rows/schema' })
+
 // 内存：演示、单测、离线队列的落点，可注入延迟与失败率
 createMemoryDataSource(seed, { latency: 300, failRate: 0.1 })
 ```
+
+### 表结构（列 + 视图）同步
+
+行数据之外，字段定义、页签、筛选、分组这些也常常要跟着账号走——否则换台机器就退回代码默认列，多人也看不到同一套页签。实现 `loadSchema` / `saveSchema` 即可：
+
+```ts
+interface BitableSchemaSnapshot {
+  columns: BitableColumnConfig<any>[];  // 已剔除 render / resolveFiles 等函数
+  views: BitableViewConfig[];
+  activeViewId?: string;
+  deletedColumnIds?: string[];          // 用户删掉的默认列，代码升级时不要再补回来
+  lockedColumnIds?: string[];
+  schemaVersion?: string;               // 写入时的结构版本号
+  updatedAt?: number;
+}
+```
+
+两个关键取舍：
+
+- **远端只存「用户改动」，不存完整列配置。** `render` 回调、类型专属外观是代码资产，不该走网络也不该被覆盖。落回运行时状态时按 `id` 合并：名字/宽度/类型以远端为准，`render` 与 `editable` 以代码为准（`applySchema`）。
+- **结构整份覆盖，不做字段级 diff。** 列与视图是一份整体配置，`PUT` 一份 JSON 就够；但会做**内容去重**——应用远端 schema 会触发 state 变化，去重后不会把刚拉下来的内容原样再写回去（`createSchemaSaver`）。
+
+结构写回同样防抖（默认 `syncDebounceMs × 2`），失败不会污染本地状态，下次改动会重试整份。`flushSync()` 会把行数据和表结构一起推出去。
+
+不实现这两个方法时，列与视图继续只存 `localStorage`——**单机用完全够，多端共享才需要接**。
 
 ### 几条要知道的约定
 
 - **远端是权威**：`loadRows()` 会覆盖本地缓存，别指望它做合并（需要合并就在适配器里自己做）。
 - **只读数据源合法**：只实现 `loadRows` 即可，未实现的写入方法会被跳过而不是报错。
-- **列配置与视图仍存本地**：`dataSource` 只管行数据。字段定义、筛选、分组、染色这些视图配置目前还在 `localStorage`，多端共享需要另外接。
 - **`storageKey` 仍是缓存命名空间**：换账套时数据源也应该换（`dataSource` 变化会触发重新加载）。
 
 ---
@@ -616,6 +646,9 @@ toggleGroupCollapse, toggleAllGroupsCollapse
 | `parseClipboardMatrix` / `coercePastedValue` / `buildPastePlan` | 粘贴：剪贴板 TSV → 矩阵 → 按列类型转换 → 落到具体 `{ rowId, fieldId, value }`，越界裁剪与锁定列跳过都在这里 |
 | `createRestDataSource` / `createMemoryDataSource` | 数据源适配器：REST 资源式接口 / 内存实现（可注入延迟与失败率） |
 | `createSyncQueue` / `diffRows` / `snapshotRows` | 同步引擎：快照差分（只带变化字段）+ 防抖批量写 + 失败保留待重试 |
+| `buildSchema` / `applySchema` / `serializeColumns` | 表结构：运行时状态 ↔ 可传输快照，远端改动按 id 合并回代码定义 |
+| `mergeColumns` / `mergeViews` / `normalizePresetViews` | 列与视图的合并规则（本地读取与远端 schema 共用同一套，避免两边行为分叉） |
+| `createSchemaSaver` | 结构写回器：防抖 + 内容去重（应用远端 schema 后不会原样写回去） |
 
 ### 字段类型
 
@@ -696,6 +729,7 @@ src/
 ├── exportTable.ts               CSV / 最小 OOXML xlsx 导出（纯函数 + 下载入口）
 ├── clipboard.ts                 剪贴板 TSV 解析与粘贴计划（纯函数）
 ├── dataSource.ts                数据源适配层：diff / 同步队列 / REST 与内存适配器
+├── schema.ts                    表结构：序列化、与代码默认列合并、结构写回（纯函数）
 ├── fillSeries.ts                拖拽填充计划（纯函数）
 ├── spreadsheet.ts               Excel / CSV 解析与字段类型推断（纯函数，零依赖）
 ├── BitableTable.tsx             主容器 + 表格视图 + 父子记录 + 拖拽
@@ -716,7 +750,7 @@ playground/                      demo（npm run dev）
 
 ## 已知限制
 
-- **行数据可接后端，列与视图仍在本机**：`dataSource` 只同步行；字段定义、筛选、分组、染色存在 `localStorage`，多端共享要另外接。多人协作还需要自己加冲突解决与实时推送。
+- **多人同时改同一份表结构会互相覆盖**：`saveSchema` 是整份覆盖（不做字段级合并），两个人同时改字段配置时后写的赢。行数据是字段级 diff，冲突面小得多。真正的多人协作还需要服务端加版本号 / 冲突解决与实时推送。
 - **虚拟滚动开启时跨屏拖拽填充受限**：DOM 里没有渲染的行无法被拖到，需要目标行在可视区内。
 - **`any` 未收干净**：`BitableColumnConfig<T = any>` 等位置保留了 `any`，泛型收紧要逐步做。
 - **无测试**：仓库目前没有单元测试，靠 playground 手工回归（纯函数模块可单独 import 测，`filtering` / `aggregate` / `exportTable` 都已用临时脚本验过边界）。

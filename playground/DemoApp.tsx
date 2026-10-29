@@ -119,7 +119,7 @@ export function DemoApp() {
     }
     backendRef.current = createMemoryDataSource<TaskRow>(dataRef.current, { latency: 260 });
     setBackendOn(true);
-    showToast('已接入模拟后端（260ms 延迟）：之后的改动会同步过去');
+    showToast('已接入模拟后端（260ms 延迟）：行数据与字段配置都会同步过去');
   };
 
   const syncTone =
@@ -195,7 +195,7 @@ export function DemoApp() {
                       ? 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
                       : 'border-[#005BAC]/40 bg-blue-50/60 hover:bg-blue-50 text-[#005BAC] font-medium'
                   }`}
-                  title="演示数据源适配层：启用后所有改动会经 diff + 防抖写进模拟后端"
+                  title="演示数据源适配层：启用后行数据经 diff + 防抖写回，字段配置与视图整份覆盖"
                 >
                   {backendOn ? '断开后端' : '接入模拟后端'}
                 </button>
