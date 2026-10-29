@@ -361,6 +361,14 @@ export function DemoApp() {
               onCopyCells={(info) => {
                 showToast(`已复制 ${info.rows}×${info.columns} 个单元格，可直接粘贴到 Excel`);
               }}
+              onPasteCells={(info) => {
+                const truncated =
+                  info.rows < info.sourceRows || info.columns < info.sourceColumns
+                    ? `（剪贴板 ${info.sourceRows}×${info.sourceColumns}，超出部分已忽略）`
+                    : '';
+                const skipped = info.skipped > 0 ? `，跳过 ${info.skipped} 个锁定格` : '';
+                showToast(`已粘贴 ${info.rows}×${info.columns} 格${skipped}${truncated}`);
+              }}
               onSelectRows={(ids) => {
                 // Shift+点击的范围勾选：把勾选集整体替换为这批行
                 const next: Record<string, boolean> = {};

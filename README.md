@@ -39,6 +39,7 @@
 | 多级分组 | 飞书式嵌套分组，可逐级折叠、全部折叠 |
 | 分组汇总 | 组尾汇总行：求和 / 平均值 / 最大 / 最小 / 计数，按列配置，未分组时也能出底部合计 |
 | 区域选择 | 点选单元格、Shift+方向键框选矩形区域，**Ctrl/Cmd+C 复制为 TSV**，可直接粘进 Excel |
+| 粘贴 | **Ctrl/Cmd+V 从选区左上角铺开**，按列类型转换（数字/日期/布尔/多选），越界裁剪、锁定列跳过 |
 | 行范围选择 | **Shift+点击行内任意位置选中连续多行**（锚点保持，可反复调整终点）；Ctrl/Cmd+点击切换单行 |
 | 键盘导航 | 方向键在单元格间移动，Esc 取消选区；正在编辑输入框时不抢键 |
 | 条件染色 | 单元格 / 整行染色，规则命中即生效，支持取色盘与业务色板 |
@@ -50,7 +51,7 @@
 | 批量更新 | `updateCells` 一次 `setData` 写多格，只产生一步撤销 |
 | 导入表格 | 上传 `.xlsx` / `.csv` / `.tsv`，自动识别字段类型与单选项，可逐列改类型后替换或追加 |
 | 导出表格 | 导出当前视图（已筛选 / 排序后的记录、仅可见列）为 **.xlsx** 或 **.csv**，自研最小 OOXML 打包，不引 SheetJS |
-| 虚拟滚动 | 平铺大表只渲染可视区附近的行（默认 >150 行触发），导入几万行也不卡 |
+| 虚拟滚动 | 只渲染可视区附近的行（默认 >150 行触发），**平铺与分组一视同仁**，导入几万行也不卡 |
 | 持久化 | 数据、列、视图、当前视图、schema 版本全部落 `localStorage`，刷新不丢 |
 | SSR 安全 | 无 `localStorage` 环境自动降级为内存存储，不抛异常 |
 
@@ -127,6 +128,28 @@ updateViewConfig(activeViewId, {
 
 复制走 `navigator.clipboard`，非安全上下文（http 内网）自动降级到 `execCommand`。宿主可通过 `onCopyCells` 拿到 `{ text, rows, columns }` 做「已复制 3×2」之类的提示。
 
+### 粘贴
+
+Ctrl / Cmd + V 从**选区左上角**开始铺开矩阵，与 Excel 一致。剪贴板按 TSV 解析（Excel / 飞书 / Google Sheets 复制的标准格式），支持 `"..."` 包裹的含逗号、含换行的单元格。
+
+| 情况 | 处理方式 |
+| --- | --- |
+| 剪贴板是单个值（无 `\t`、无换行） | 只写当前格，**不切分**——避免一段含逗号的普通文本被拆成两列 |
+| 行长度不齐（Excel 复制的短行） | 缺的格子按「清空」写入 |
+| 超出表格底部 / 右侧 | 裁剪，不报错（粘到表尾通常只想填满剩下的行） |
+| 字段被 `isLocked` 或 `editable: false` | 跳过并计入 `skipped`，不会出现「粘了但没保存」 |
+| 正在编辑单元格 | 不拦截，交给浏览器原生粘贴 |
+
+值按列类型转换（`src/clipboard.ts`，纯函数）：
+
+- 数字列：`¥2,500` → `2500`、`85%` → `0.85`、`1,234.5` → `1234.5`；**转不了就原样保留文本**，不静默丢数据
+- 日期列：`2026/10/08` → `2026-10-08`，带时间的保留 `HH:mm`
+- 布尔列：`是 / 否 / true / false / 1 / 0` → `true / false`
+- 多选列：按 `,`、`、`、`;`、`|` 切分成数组
+- 空字符串：清空该格
+
+写入走 `onUpdateCells`，**整次粘贴只产生一步撤销**；未接时退化为逐格 `onUpdateCell`。粘贴后选区会自动扩到刚落下的矩形，落点一眼可见。
+
 ### 导出
 
 `exportView(format, filename?)` 导出的是**当前视图的可见结果**：筛选、排序已应用，隐藏列不导出。
@@ -136,12 +159,13 @@ updateViewConfig(activeViewId, {
 
 ### 虚拟滚动
 
-平铺（无分组 / 无父子层级）且行数超过 `virtualThreshold`（默认 150）时，只渲染可视区上下各 12 行，其余用占位行撑出滚动条高度。
+行数超过 `virtualThreshold`（默认 150）时，只渲染可视区上下各 12 行，其余用占位行撑出滚动条高度。
 
-- 行高固定（32 / 40 / 52px，随密度变化），所以偏移可以直接算，不需要测量 DOM；
+- 行高固定（32 / 40 / 52px，随密度变化），偏移可以直接算，不需要测量 DOM；
+- **分组也支持**：把「分组标题 + 数据行 + 汇总行」摊平成一条滚动坐标系，每组记录自己的起始像素与行号区间，窗口跨组计算。整组落在窗口外时连分组标题一起跳过；
 - 滚动位置按行高量化，滚一屏只触发几次重渲染，不是每像素一次；
-- 有分组时不启用（分组头与数据行交错，窗口要跨组计算，收益远小于复杂度）；
-- 已知取舍：虚拟滚动开启时，跨屏拖拽填充需要目标行在可视区内。
+- 分组标题按 30px 估算，估算误差会被 12 行 overscan 吸收；
+- 已知取舍：虚拟滚动开启时，跨屏拖拽填充需要目标行在可视区内（DOM 里没有的行无法被拖到）。
 
 ---
 
@@ -498,6 +522,7 @@ toggleGroupCollapse, toggleAllGroupsCollapse
 | `onUpdateCells(updates, label?)` | 批量写回，一次只算一步撤销。甘特拖拽改期用它同时改开始与结束；`label` 会进撤销提示 |
 | `onCreateRow(values)` | 表单视图提交回调，值已按字段类型转换好（数字→number、复选框→boolean、多选→string[]）。不接则表单只做校验不写回 |
 | `onCopyCells({ text, rows, columns })` | 单元格区域复制回调，`text` 是 TSV。接上就能提示「已复制 3×2」 |
+| `onPasteCells({ rows, columns, sourceRows, sourceColumns, skipped })` | 粘贴完成回调，可据此提示「已粘贴 3×2，跳过 1 个锁定格」 |
 | `virtualThreshold` | 平铺大表启用虚拟滚动的行数阈值，默认 `150`；传 `0` 关闭 |
 
 ### 纯函数工具
@@ -519,6 +544,7 @@ toggleGroupCollapse, toggleAllGroupsCollapse
 | `computeSummary` / `resolveSummaryType` / `formatNumber` | 分组汇总：`{ count, cells }`，跳过空值，数字千分位、日期取极值时保留原格式 |
 | `buildCsv` / `buildXlsx` / `exportRows` / `downloadBlob` | 导出：TSV/CSV 转义、最小 OOXML 打包、浏览器下载（SSR 下静默跳过） |
 | `cellToText` / `columnLetter` / `crc32` | 导出底层原子函数 |
+| `parseClipboardMatrix` / `coercePastedValue` / `buildPastePlan` | 粘贴：剪贴板 TSV → 矩阵 → 按列类型转换 → 落到具体 `{ rowId, fieldId, value }`，越界裁剪与锁定列跳过都在这里 |
 
 ### 字段类型
 
@@ -597,6 +623,7 @@ src/
 ├── filtering.ts                 筛选求值：比较语义 + 操作符适用范围（纯函数）
 ├── aggregate.ts                 分组汇总：求和/平均/极值/计数（纯函数）
 ├── exportTable.ts               CSV / 最小 OOXML xlsx 导出（纯函数 + 下载入口）
+├── clipboard.ts                 剪贴板 TSV 解析与粘贴计划（纯函数）
 ├── fillSeries.ts                拖拽填充计划（纯函数）
 ├── spreadsheet.ts               Excel / CSV 解析与字段类型推断（纯函数，零依赖）
 ├── BitableTable.tsx             主容器 + 表格视图 + 父子记录 + 拖拽
@@ -618,7 +645,7 @@ playground/                      demo（npm run dev）
 ## 已知限制
 
 - **仅客户端**：持久化走 `localStorage`，多标签页 / 多人协作需要自己接后端。SSR 下会自动降级为内存存储（可用但不持久）。
-- **虚拟滚动只覆盖平铺大表**：有分组或父子层级时不启用窗口化，几万行 + 分组仍会卡；虚拟滚动开启时跨屏拖拽填充需要目标行在可视区内。
+- **虚拟滚动开启时跨屏拖拽填充受限**：DOM 里没有渲染的行无法被拖到，需要目标行在可视区内。
 - **`any` 未收干净**：`BitableColumnConfig<T = any>` 等位置保留了 `any`，泛型收紧要逐步做。
 - **无测试**：仓库目前没有单元测试，靠 playground 手工回归（纯函数模块可单独 import 测，`filtering` / `aggregate` / `exportTable` 都已用临时脚本验过边界）。
 - **图标依赖 Google Fonts**：离线环境需自托管字体。
@@ -634,9 +661,9 @@ playground/                      demo（npm run dev）
 - [x] 数字 / 日期比较操作符（大于、大于等于、小于、小于等于、介于）
 - [x] 分组汇总与底部合计
 - [x] 单元格区域选择、方向键导航、Ctrl+C 复制为 TSV
+- [x] Ctrl+V 粘贴（TSV → 多格批量写入，按列类型转换）
 - [x] 导出 CSV / XLSX（零依赖）
-- [x] 虚拟滚动（平铺大表）
-- [ ] 分组状态下的虚拟滚动
+- [x] 虚拟滚动（平铺与分组）
 - [ ] 数据源适配层（REST / Supabase）
 - [ ] Vitest + Testing Library 覆盖 hook 与筛选排序逻辑
 - [ ] 去掉 Google Fonts 依赖，改内置 SVG 图标

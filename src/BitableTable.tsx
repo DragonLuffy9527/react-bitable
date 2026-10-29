@@ -22,6 +22,7 @@ import { BitableFormView } from './BitableFormView';
 import { hasSummaryCells, SUMMARY_SHORT_LABELS } from './aggregate';
 import type { BitableSummaryResult } from './aggregate';
 import { cellToText } from './exportTable';
+import { buildPastePlan, parseClipboardMatrix } from './clipboard';
 
 /** clipboard API 在非安全上下文（http 内网）不可用时的兜底 */
 function fallbackCopyText(text: string): void {
@@ -119,6 +120,17 @@ interface BitableTableProps<T extends { id: string }> {
    */
   onCopyCells?: (info: { text: string; rows: number; columns: number }) => void;
   /**
+   * 粘贴完成回调（Ctrl/Cmd+V）。矩阵从选区左上角开始铺，
+   * 越界部分丢弃、锁定列跳过；skipped 是被跳过的单元格数。
+   */
+  onPasteCells?: (info: {
+    rows: number;
+    columns: number;
+    sourceRows: number;
+    sourceColumns: number;
+    skipped: number;
+  }) => void;
+  /**
    * 填充模式：撑满父容器高度（父级需为确定高度的 flex 列，本组件 h-full 内部滚动）。
    * 默认 false 时沿用旧版 max-h-[calc(100vh-215px)] 视口截断，四个台账页应统一传 true 以对齐底边。
    */
@@ -163,6 +175,7 @@ export const BitableTable = <T extends { id: string }>({
   onOpenAttachment,
   onFillCells,
   onCopyCells,
+  onPasteCells,
   virtualThreshold = 150,
   fillHeight = false
 }: BitableTableProps<T>) => {
@@ -501,7 +514,15 @@ export const BitableTable = <T extends { id: string }>({
     const idx = visibleRowIdList.indexOf(scrollToRowId);
     const root = cellContainerRef.current;
     if (idx < 0 || !root) return;
-    root.scrollTop = Math.max(0, (idx - 5) * ROW_H);
+    // 按分组布局换算像素位置：分组标题也占高度，不能直接用 idx * ROW_H
+    let targetTop = 0;
+    for (const l of groupLayout.map.values()) {
+      if (idx >= l.rowStart && idx < l.rowStart + l.rowCount) {
+        targetTop = l.rowsTop + (idx - l.rowStart) * ROW_H;
+        break;
+      }
+    }
+    root.scrollTop = Math.max(0, targetTop - ROW_H * 3);
     setScrollTop(Math.max(0, Math.floor(root.scrollTop / ROW_H) * ROW_H));
     const raf = requestAnimationFrame(() => {
       flash();
@@ -610,6 +631,7 @@ export const BitableTable = <T extends { id: string }>({
   const cellContainerRef = useRef<HTMLDivElement | null>(null);
   const ROW_H = { compact: 32, medium: 40, relaxed: 52 }[density] ?? 40;
   const HEADER_H = 32; // thead h-8
+  const GROUP_H = 30; // 分组标题行（py-1.5 + 12px 文本 + 上下边框）
   const OVERSCAN = 12; // 视口上下各多渲染 12 行，滚动时不会出现白边
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportH, setViewportH] = useState(600);
@@ -863,6 +885,44 @@ export const BitableTable = <T extends { id: string }>({
   });
 
   /**
+   * 分组布局：把「分组标题 + 数据行 + 汇总行」摊平成一条滚动坐标系，
+   * 记录每组从哪个像素开始、数据行从哪个像素开始、共多少行。
+   *
+   * 有了它，窗口化就能跨组计算——否则只能对「平铺大表」做虚拟滚动，
+   * 而分组恰恰是记录多的时候最常用的视图。
+   */
+  const groupLayout = useMemo(() => {
+    const map = new Map<
+      string,
+      { top: number; rowsTop: number; rowCount: number; rowStart: number }
+    >();
+    let cursor = 0;
+    let totalRows = 0;
+
+    groupedData.forEach((g) => {
+      if (!isSectionVisible(g)) return;
+      const isLeaf = (g as any).isLeaf !== false;
+      const collapsed = !!collapsedGroups[g.groupKey];
+      const hasHeader = g.groupKey !== '__ALL__';
+      const rowCount =
+        isLeaf && !collapsed ? (pcEnabled ? buildHierarchy(g.items).length : g.items.length) : 0;
+      const hasSummary = isLeaf && !collapsed && hasSummaryCells(g.summary);
+
+      const top = cursor;
+      const rowsTop = top + (hasHeader ? GROUP_H : 0);
+      cursor = rowsTop + rowCount * ROW_H + (hasSummary ? ROW_H : 0);
+
+      map.set(g.groupKey, { top, rowsTop, rowCount, rowStart: totalRows });
+      totalRows += rowCount;
+    });
+
+    return { map, totalRows, totalHeight: cursor };
+  }, [groupedData, collapsedGroups, collapsedRows, pcEnabled, primaryFieldId, viewConfig?.summaryRules]);
+
+  // 是否启用窗口化：平铺和分组一视同仁，只看总行数
+  const virtualOn = virtualThreshold > 0 && groupLayout.totalRows > virtualThreshold;
+
+  /**
    * Shift+点击：选中锚点行到当前行的可见区间。
    * 返回 true 表示已按范围处理（调用方此时不要再改锚点，否则连续 Shift+点击
    * 每次都从上一行起算，永远只能选两行）。
@@ -994,8 +1054,74 @@ export const BitableTable = <T extends { id: string }>({
     }
   };
 
-  const handleCellKeyDown = (e: React.KeyboardEvent) => {
+  /**
+   * 粘贴：从选区左上角开始铺矩阵，与 Excel 一致。
+   * 越界丢弃（粘贴到表尾时通常只想填满剩下的行），锁定列跳过并计数，
+   * 批量写走 onUpdateCells 以便只产生一步撤销。
+   */
+  const handlePaste = (e: React.ClipboardEvent) => {
     if (!cellSel) return;
+    const target = e.target as HTMLElement | null;
+    if (
+      target &&
+      (target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable)
+    ) {
+      return; // 正在编辑单元格，交给浏览器原生粘贴
+    }
+
+    const text = e.clipboardData?.getData('text/plain') ?? '';
+    if (!text) return;
+    const matrix = parseClipboardMatrix(text);
+    if (matrix.length === 0) return;
+
+    const startRow = cellRange ? cellRange.rowStart : rowIndexById.get(cellSel.focus.rowId) ?? 0;
+    const startCol = cellRange ? cellRange.colStart : colIndexById.get(cellSel.focus.fieldId) ?? 0;
+
+    const plan = buildPastePlan({
+      matrix,
+      startRow,
+      startCol,
+      rowIds: visibleRowIdList,
+      columns: visibleColumns
+    });
+    e.preventDefault();
+    if (plan.updates.length === 0) return;
+
+    if (onUpdateCells) {
+      onUpdateCells(plan.updates, `粘贴 ${plan.rows}×${plan.columns} 格`);
+    } else {
+      plan.updates.forEach((u) => onUpdateCell(u.rowId, u.fieldId, u.value));
+    }
+
+    // 把选区扩到刚粘贴的矩形，让用户看清落点
+    const endRowIdx = Math.min(startRow + plan.rows - 1, visibleRowIdList.length - 1);
+    const endColIdx = Math.min(startCol + plan.columns - 1, visibleColumns.length - 1);
+    if (endRowIdx >= startRow && endColIdx >= startCol) {
+      setCellSel({
+        anchor: {
+          rowId: visibleRowIdList[startRow],
+          fieldId: visibleColumns[startCol].id
+        },
+        focus: {
+          rowId: visibleRowIdList[endRowIdx],
+          fieldId: visibleColumns[endColIdx].id
+        }
+      });
+    }
+
+    onPasteCells?.({
+      rows: plan.rows,
+      columns: plan.columns,
+      sourceRows: plan.sourceRows,
+      sourceColumns: plan.sourceColumns,
+      skipped: plan.skipped
+    });
+  };
+
+  const handleCellKeyDown = (e: React.KeyboardEvent) => {    if (!cellSel) return;
     const target = e.target as HTMLElement | null;
     // 正在编辑单元格时不抢键盘
     if (
@@ -1062,6 +1188,7 @@ export const BitableTable = <T extends { id: string }>({
       ref={cellContainerRef}
       tabIndex={-1}
       onKeyDown={handleCellKeyDown}
+      onPaste={handlePaste}
       onScroll={(e) => {
         const el = e.currentTarget;
         // 按行高量化，滚动一屏只会触发几次重渲染而不是每像素一次
@@ -1341,20 +1468,36 @@ export const BitableTable = <T extends { id: string }>({
               const groupVal = (group as any).groupValue || group.groupTitle;
               const isLeaf = (group as any).isLeaf !== false;
 
-              // —— 虚拟滚动窗口：只对「平铺大表」生效 ——
-              // 有分组时行是「分组头 + 数据行」交错结构，窗口边界要跨组计算，
-              // 收益远小于复杂度；而导入进来的大表默认就是平铺的，覆盖了真正的性能悬崖。
+              // —— 虚拟滚动窗口：按分组在滚动坐标系里的位置，算它自己的局部区间 ——
               const hierarchy = isLeaf ? buildHierarchy(group.items) : [];
-              const isFlatAll = isDefaultAllGroup && !pcEnabled;
-              const virtualOn =
-                isFlatAll && virtualThreshold > 0 && hierarchy.length > virtualThreshold;
-              const bodyOffset = Math.max(0, scrollTop - HEADER_H);
-              const winStart = virtualOn
-                ? Math.max(0, Math.floor(bodyOffset / ROW_H) - OVERSCAN)
-                : 0;
-              const winEnd = virtualOn
-                ? Math.min(hierarchy.length, Math.ceil((bodyOffset + viewportH) / ROW_H) + OVERSCAN)
-                : hierarchy.length;
+              const layout = groupLayout.map.get(group.groupKey);
+              const total = hierarchy.length;
+              const winTop = Math.max(0, scrollTop - HEADER_H);
+              const winBottom = winTop + viewportH;
+
+              // 整组在窗口外（上方或下方）时连分组头一起跳过
+              const groupBottom = layout ? layout.rowsTop + total * ROW_H : 0;
+              const inWindow =
+                !virtualOn ||
+                !layout ||
+                (layout.top < winBottom + OVERSCAN * ROW_H &&
+                  groupBottom > winTop - OVERSCAN * ROW_H);
+              if (!inWindow) return null;
+
+              const winStart =
+                virtualOn && layout
+                  ? Math.max(
+                      0,
+                      Math.min(total, Math.floor((winTop - layout.rowsTop) / ROW_H) - OVERSCAN)
+                    )
+                  : 0;
+              const winEnd =
+                virtualOn && layout
+                  ? Math.max(
+                      0,
+                      Math.min(total, Math.ceil((winBottom - layout.rowsTop) / ROW_H) + OVERSCAN)
+                    )
+                  : total;
 
               // Shading by level
               const levelBg =

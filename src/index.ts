@@ -89,6 +89,10 @@ export {
 } from './exportTable';
 export type { ExportColumn, ExportFormat } from './exportTable';
 
+// —— 粘贴（纯函数：剪贴板 TSV → 单元格写入计划） ——
+export { parseClipboardMatrix, coercePastedValue, buildPastePlan } from './clipboard';
+export type { PasteUpdate, PastePlan, PasteColumnLike } from './clipboard';
+
 // —— 主视图容器（内部按 viewType 分发到 6 种视图） ——
 export { BitableTable } from './BitableTable';
 
