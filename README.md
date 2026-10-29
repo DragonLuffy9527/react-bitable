@@ -33,14 +33,17 @@
 | 能力 | 说明 |
 | --- | --- |
 | 六种视图 | 表格 grid / 看板 kanban / 画册 gallery / 甘特 gantt / 日历 calendar / 表单 form，共用同一份视图配置 |
-| 字段配置 | 7 种字段类型、增删改、重命名、拖拽排序、调列宽、锁定（受控只读）、冻结列 |
+| 字段配置 | 7 种字段类型、增删改、重命名、拖拽排序、调列宽、锁定（受控只读）、冻结列、视图级显隐 |
 | 筛选 / 排序 | AND / OR 多条件筛选，7 种操作符；多字段排序 |
 | 多级分组 | 飞书式嵌套分组，可逐级折叠、全部折叠 |
 | 条件染色 | 单元格 / 整行染色，规则命中即生效，支持取色盘与业务色板 |
 | 行内编辑 | 单元格点开即改，回车保存、Esc 取消、Tab 走格 |
 | 父子记录 | 拖行首方块建立层级，父行可展开折叠 |
 | 视图管理 | 新建 / 重命名 / 复制 / 删除 / 重置，协作视图与个人视图隔离，可锁定 |
-| 持久化 | 数据、列、视图、当前视图、schem 版本全部落 `localStorage`，刷新不丢 |
+| 撤销重做 | Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y，批量写入只记一步；勾选集也能一起回退 |
+| 拖拽填充 | 单元格右下角手柄下拉，Excel 式：数字递增、日期顺延、文本尾号递增 |
+| 批量更新 | `updateCells` 一次 `setData` 写多格，只产生一步撤销 |
+| 持久化 | 数据、列、视图、当前视图、schema 版本全部落 `localStorage`，刷新不丢 |
 | SSR 安全 | 无 `localStorage` 环境自动降级为内存存储，不抛异常 |
 
 ---
@@ -199,12 +202,14 @@ export function TaskTable() {
 | `presetViews` | `BitableViewConfig[]` | 预设视图，第一个视为主视图（不可删除） |
 | `onDataChange?` | `(data: T[]) => void` | 数据变更回调，接后端时在这里发请求 |
 | `schemaVersion?` | `string` | 字段表结构版本号。改字段定义后调大它，旧列配置会重置 |
+| `onHistoryToast?` | `(message: string) => void` | 撤销 / 重做执行后的即时反馈，接到你自己的 toast |
+| `selectionState?` | `{ checkedIds, setCheckedIds }` | 把页面的勾选集注册进撤销历史，Excel 式多选可被 Ctrl+Z 撤销 |
 
-返回值按用途分四组：
+返回值按用途分五组：
 
 ```ts
 // 状态
-data, processedData, groupedData, columns, visibleColumns,
+data, processedData, groupedData, columns, viewColumns, visibleColumns,
 views, activeView, activeViewId, isMasterView,
 collapsedGroups, isAllGroupsCollapsed, searchQuery,
 primaryFieldId, parentFieldId
@@ -219,14 +224,25 @@ toggleColumnLock, toggleColumnFreeze, updateColumnType, updateColumnConfig,
 resetColumns, renameColumn, resizeColumn
 
 // 数据
-updateCell, addRow, deleteRow, deleteRows, insertRow, duplicateRow,
+updateCell, updateCells, addRow, deleteRow, deleteRows, insertRow, duplicateRow,
 detachRow, moveRow
+
+// 撤销重做
+undo, redo, canUndo, canRedo, undoLabel, redoLabel
 
 // 视图配置
 setFilterRules, setFilterLogic, setSortRules, setGroupByFieldId, setGroupRules,
 setDensity, setColorRules, setSearchQuery,
 toggleGroupCollapse, toggleAllGroupsCollapse
 ```
+
+> **`columns` 还是 `viewColumns`？**
+> `columns` 是字段全量定义；`viewColumns` 是「当前视图生效」的列——被当前视图
+> `hiddenFieldIds` 命中的列会被覆盖成 `visible: false`。渲染层请一律传 `viewColumns`，
+> 这样字段显隐才是**视图粒度**的（不同视图互不影响）。
+>
+> **批量写入用 `updateCells`**：一次调用只产生一步撤销记录；循环调 `updateCell`
+> 会变成 N 步撤销，也会触发 N 次保存反馈。
 
 ### 组件
 
@@ -241,6 +257,31 @@ toggleGroupCollapse, toggleAllGroupsCollapse
 
 `extraActions` 用来把业务按钮挂到工具栏右侧；按钮文字包一层 `.tb-label` 后，
 窄屏三档自适应（full / compact / ultra）会自动把文字折叠成图标。
+
+几个容易漏接的 props：
+
+| prop | 作用 |
+| --- | --- |
+| `onFillCells(updates)` | 拖拽填充（单元格右下角手柄下拉）的批量写入回调。不接会退化成逐格 `onUpdateCell`，产生 N 次保存反馈 |
+| `onSelectRows(ids)` | Shift+点击范围选择回传的行集合，页面把勾选集整体替换为这批行 |
+| `isLockProtectedColumn(id)` | 命中的已锁定列视为「后端固定字段」：锁图标显示红色且不可解锁 |
+| `fillHeight` | 撑满父容器高度（父级需为确定高度的 flex 列），多台账页统一传 `true` 才能对齐底边 |
+| `onOpenAttachment(row)` | 画册视图封面点「预览附件」时回传该行，由页面接到自己的附件查看器 |
+
+### 纯函数工具
+
+不依赖组件、可单独 import 使用：
+
+| 导出 | 用途 |
+| --- | --- |
+| `toValueList` / `firstValue` | 单元格原始值 → 字符串数组 / 首个值（统一处理多值字段） |
+| `findOption` / `resolveOptionList` / `FALLBACK_OPTION_COLOR` | 选项解析与缺省配色 |
+| `normalizeUrl` / `displayUrl` / `initialsOf` / `isMultiValueType` | 链接规范化、头像首字母、多值类型判定 |
+| `buildFillPlan` / `isFillableFieldType` | 拖拽填充计划：给定源区域与目标区域，算出 `{ rowId, fieldId, value }[]`（数字递增、日期顺延、文本尾号递增） |
+| `incrementValue` / `incrementTrailingNumber` / `addDaysToDateText` | 填充用到的单步递增原子函数 |
+| `buildCardModel` / `resolveCardFields` / `getFieldText` | 看板 / 画册 / 甘特的卡片模型 |
+| `pickStatusColumn` / `pickDateColumn` / `formatTag` / `personFieldLabel` | 卡片取字段的启发式规则 |
+| `SELECT_OPTION_PALETTE` | 新建选项时的取色盘 |
 
 ### 字段类型
 
@@ -313,8 +354,10 @@ src/
 ├── index.ts                     统一出口
 ├── styles.css                   行为样式 + CSS 变量主题
 ├── types.ts                     字段 / 视图 / 筛选 / 染色 全部类型
-├── useBitable.ts                状态中枢：持久化、筛选排序分组、所有写操作
+├── useBitable.ts                状态中枢：持久化、筛选排序分组、撤销重做、所有写操作
 ├── cardModel.ts                 看板 / 画册 / 甘特共用的卡片模型
+├── cellValue.ts                 单元格取值与选项解析（纯函数）
+├── fillSeries.ts                拖拽填充计划（纯函数）
 ├── BitableTable.tsx             主容器 + 表格视图 + 父子记录 + 拖拽
 ├── BitableViewTabs.tsx          视图页签
 ├── BitableToolbar.tsx           工具栏（窄屏三档自适应）
@@ -333,16 +376,17 @@ playground/                      demo（npm run dev）
 ## 已知限制
 
 - **仅客户端**：持久化走 `localStorage`，多标签页 / 多人协作需要自己接后端。SSR 下会自动降级为内存存储（可用但不持久）。
-- **列冻结未完全生效**：`isFrozen` 会被保存，横向滚动的贴左渲染尚未实现。
-- **视图级列显隐未生效**：`visibleColumnIds` / `columnOrder` 已持久化，渲染层目前以字段级 `visible` 为准。
+- **无虚拟滚动**：万行级数据会卡，需要自己做窗口化。
 - **`any` 未收干净**：`BitableColumnConfig<T = any>` 等位置保留了 `any`，泛型收紧要逐步做。
 - **无测试**：仓库目前没有单元测试，靠 playground 手工回归。
 - **图标依赖 Google Fonts**：离线环境需自托管字体。
 
 ## Roadmap
 
-- [ ] 列冻结渲染
-- [ ] 视图级列显隐与列顺序
+- [x] 列冻结渲染
+- [x] 视图级列显隐与列顺序
+- [x] 撤销 / 重做（Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y）
+- [x] 拖拽填充（Excel 式下拉）
 - [ ] 虚拟滚动（万行级）
 - [ ] 导出 CSV / XLSX
 - [ ] 数据源适配层（REST / Supabase）

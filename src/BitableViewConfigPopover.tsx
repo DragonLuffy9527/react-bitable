@@ -77,7 +77,9 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
 }) => {
   const [editingName, setEditingName] = useState(activeView.name);
   const [isRenaming, setIsRenaming] = useState(false);
-  const currentScope: BitableViewScope = activeView.scope || 'collaborative';
+  // 系统总表固定为协作视图
+  const isScopeLocked = isMasterView;
+  const currentScope: BitableViewScope = isScopeLocked ? 'collaborative' : (activeView.scope || 'collaborative');
   const currentViewType = activeView.viewType || 'grid';
   const isLocked = !!activeView.isLocked;
   const selCls =
@@ -92,6 +94,7 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
   };
 
   const handleChangeScope = (scope: BitableViewScope) => {
+    if (isScopeLocked && scope === 'personal') return;
     if (onUpdateViewConfig) {
       onUpdateViewConfig({ scope });
     }
@@ -149,7 +152,7 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
               </div>
               <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10.5px] text-slate-500 bg-slate-200/70 rounded-full font-medium">
                 <span className="material-symbols-outlined text-[12px]">lock</span>
-                主视图（不可删除）
+                系统基础总表 (不可删除)
               </span>
             </div>
           ) : !isRenaming ? (
@@ -162,11 +165,18 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
               </div>
               <button
                 type="button"
+                disabled={isLocked}
                 onClick={() => {
+                  if (isLocked) return;
                   setEditingName(activeView.name);
                   setIsRenaming(true);
                 }}
-                className="px-2 py-0.5 text-[11px] text-[#005BAC] hover:bg-blue-50 rounded border border-blue-200 cursor-pointer transition-colors"
+                title={isLocked ? '视图已锁定，名称不可修改（先在下方解锁视图配置）' : '重命名视图'}
+                className={`px-2 py-0.5 text-[11px] rounded border transition-colors ${
+                  isLocked
+                    ? 'text-slate-300 bg-slate-50 border-slate-200 cursor-not-allowed'
+                    : 'text-[#005BAC] hover:bg-blue-50 border-blue-200 cursor-pointer'
+                }`}
               >
                 重命名
               </button>
@@ -222,19 +232,39 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
             <button
               type="button"
               onClick={() => handleChangeScope('personal')}
-              className={`flex-1 p-2 rounded-lg border text-left transition-all cursor-pointer ${
-                currentScope === 'personal'
-                  ? 'border-[#005BAC] bg-blue-50/60 text-[#005BAC] font-medium'
-                  : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+              disabled={isScopeLocked}
+              title={
+                isScopeLocked
+                  ? '「总表」为系统基础总表，固定为协作视图，不可改为个人视图'
+                  : '切换为个人视图，仅自己可见'
+              }
+              className={`flex-1 p-2 rounded-lg border text-left transition-all ${
+                isScopeLocked
+                  ? 'border-slate-200 bg-slate-50/80 text-slate-400 cursor-not-allowed opacity-70'
+                  : currentScope === 'personal'
+                  ? 'border-[#005BAC] bg-blue-50/60 text-[#005BAC] font-medium cursor-pointer'
+                  : 'border-slate-200 text-slate-600 hover:bg-slate-50 cursor-pointer'
               }`}
             >
               <div className="flex items-center gap-1.5 text-[11.5px] font-bold">
                 <span className="material-symbols-outlined text-[15px]">person</span>
                 <span>个人视图</span>
+                {isScopeLocked && (
+                  <span className="material-symbols-outlined text-[13px] text-slate-400">lock</span>
+                )}
               </div>
-              <div className="text-[10px] text-slate-400 mt-0.5">仅自己可见，不干扰他人</div>
+              <div className="text-[10px] text-slate-400 mt-0.5">
+                {isScopeLocked ? '总表固定协作，不可切换' : '仅自己可见，不干扰他人'}
+              </div>
             </button>
           </div>
+
+          {isScopeLocked && (
+            <div className="flex items-start gap-1.5 px-1 text-[10px] text-amber-700/90 leading-relaxed">
+              <span className="material-symbols-outlined text-[12px] mt-px">info</span>
+              <span>系统基础总表固定为协作视图（全项目可见），需要个人视图请在视图页签「+」新建。</span>
+            </div>
+          )}
 
           {/* Lock view toggle */}
           <div className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 bg-slate-50/70">
@@ -313,7 +343,7 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
                     </select>
                   </label>
                   <div className="text-[10px] text-slate-400 leading-relaxed">
-                    该字段填写父记录的主键值（如 A-101），本行即成为其子记录；留空为顶层记录。
+                    该字段填写父记录的主键值（如图号 A-101），本行即成为其子记录；留空为顶层记录。
                   </div>
                 </div>
               )}
@@ -637,7 +667,7 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
           {isMasterView ? (
             <div className="w-full h-8 px-3 flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-400 text-[11px] select-none">
               <span className="material-symbols-outlined text-[14px]">lock</span>
-              <span>主视图不可删除</span>
+              <span>总表为系统基础视图，不可删除</span>
             </div>
           ) : totalViews > 1 ? (
             <button

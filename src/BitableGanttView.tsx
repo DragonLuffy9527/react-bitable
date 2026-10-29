@@ -13,8 +13,7 @@ interface BitableGanttViewProps<T extends { id: string }> {
   viewConfig?: BitableViewConfig;
 }
 
-/** 未指定阶段字段时使用的默认阶段列 */
-const DEFAULT_STAGES = ['待开始', '进行中', '待评审', '已完成', '已关闭'];
+const DEFAULT_STAGES = ['方案深化 (REV-00)', '初审复核 (REV-01)', '多专业会签 (REV-02)', '终审盖章 (REV-03)', '施工交付 (REV-04)'];
 
 export const BitableGanttView = <T extends { id: string }>({
   items,
@@ -101,12 +100,11 @@ export const BitableGanttView = <T extends { id: string }>({
           const badgeText = card.tags[0]?.text || '';
           const statusText = card.status?.text || '';
 
-          // 阶段下标：由视图配置的「阶段字段」决定（未配置则按内置默认阶段）
+          // 阶段下标：由视图配置的「阶段字段」决定（未配置则按 REV 版次）
           const stageIdx = stageOf(item);
 
-          // 状态词义 → 胶囊色调：异常类红、完成类绿、其余中性
-          const isDiff = /阻塞|异常|失败|驳回|延期|差异/.test(statusText);
-          const isApproved = /核准|归档|通过|完成|关闭/.test(statusText);
+          const isDiff = statusText.includes('差异');
+          const isApproved = statusText.includes('核准') || statusText.includes('归档');
 
           return (
             <div
@@ -124,7 +122,7 @@ export const BitableGanttView = <T extends { id: string }>({
                       {badgeText}
                     </span>
                   )}
-                  <span className="font-semibold text-slate-800 text-[12px] truncate max-w-[200px]" title={code}>
+                  <span className="font-mono font-bold text-slate-800 text-[11.5px] truncate" title={code}>
                     {code}
                   </span>
                 </div>
@@ -144,14 +142,21 @@ export const BitableGanttView = <T extends { id: string }>({
 
                 {/* Progress Bar span */}
                 <div
-                  className={`absolute h-7 rounded-md shadow-xs flex items-center justify-between gap-2 px-2 text-[10.5px] font-bold text-white transition-all ${
-                    isDiff ? 'bg-rose-500' : isApproved ? 'bg-emerald-600' : 'bg-[#005BAC]'
-                  }`}
+                  className="absolute h-7 rounded-md shadow-xs flex items-center justify-between px-2 text-[10.5px] font-bold text-white transition-all"
                   style={{
                     left: `${(stageIdx / stageCount) * 100 + 2}%`,
                     width: `${100 / stageCount - 4}%`
                   }}
                 >
+                  <div
+                    className={`absolute inset-0 rounded-md -z-10 ${
+                      isDiff
+                        ? 'bg-rose-500'
+                        : isApproved
+                        ? 'bg-emerald-600'
+                        : 'bg-[#005BAC]'
+                    }`}
+                  />
                   <span className="truncate">{badgeText || statusText}</span>
                   {statusText && badgeText && (
                     <span className="text-[9.5px] font-normal opacity-90 truncate">{statusText}</span>

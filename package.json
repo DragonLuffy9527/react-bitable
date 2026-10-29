@@ -1,6 +1,6 @@
 {
   "name": "react-bitable",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "类飞书多维表格的 React 组件库：一份数据，六种视图（表格 / 看板 / 画册 / 甘特 / 日历 / 表单），支持字段配置、筛选、排序、多级分组、条件染色、行内编辑与 localStorage 持久化。",
   "type": "module",
   "license": "MIT",

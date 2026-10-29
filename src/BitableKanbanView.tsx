@@ -41,7 +41,7 @@ export const BitableKanbanView = <T extends { id: string }>({
   // Group items by kanbanCol value
   const { kanbanGroups, optionColors } = React.useMemo(() => {
     // 先按实际值收集，避免字段预设选项与真实数据不一致时出现「一堆空泳道 + 全塞进未分类」
-    // （字段预设选项常比真实数据粗，实际值可能带「（含返工）」这类后缀）
+    // （图纸总表的 statusText 选项是 4 个规范状态，实际数据是「已核对通过 (中建国际签认)」这类细粒度值）
     const buckets = new Map<string, T[]>();
     items.forEach((item) => {
       const rawVal = (item as any)[fieldId];
@@ -56,21 +56,19 @@ export const BitableKanbanView = <T extends { id: string }>({
 
     // 泳道顺序：能对上字段选项的按选项顺序在前，其余按首次出现顺序追加
     const optionOrder = new Map<string, number>();
-    // 字段没配 options.color 时的语义兜底色：按状态词义给色，
-    // 精确匹配优先，其次按关键词包含匹配（如「已完成(含返工)」也能命中「完成」）。
-    // 列配置里显式写了 color 的，会在下面覆盖这里的兜底色。
     const colors: Record<string, string> = {
-      已完成: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-      完成: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-      通过: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-      进行中: 'bg-blue-50 text-blue-700 border-blue-200',
-      处理中: 'bg-blue-50 text-blue-700 border-blue-200',
-      待开始: 'bg-amber-50 text-amber-700 border-amber-200',
+      已核准: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      已归档: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      已核对: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      已审定: 'bg-emerald-50 text-emerald-700 border-emerald-200',
       待处理: 'bg-amber-50 text-amber-700 border-amber-200',
-      待评审: 'bg-amber-50 text-amber-700 border-amber-200',
-      阻塞: 'bg-rose-50 text-rose-700 border-rose-200',
-      异常: 'bg-rose-50 text-rose-700 border-rose-200',
-      失败: 'bg-rose-50 text-rose-700 border-rose-200',
+      待核对: 'bg-amber-50 text-amber-700 border-amber-200',
+      待发面单: 'bg-amber-50 text-amber-700 border-amber-200',
+      待签认: 'bg-red-50 text-[#b81d24] border-red-200',
+      差异: 'bg-rose-50 text-rose-700 border-rose-200',
+      预审: 'bg-blue-50 text-blue-700 border-blue-200',
+      解析: 'bg-blue-50 text-blue-700 border-blue-200',
+      待会签: 'bg-purple-50 text-purple-700 border-purple-200',
       未分类: 'bg-slate-100 text-slate-600 border-slate-200'
     };
     kanbanCol?.options?.forEach((opt, i) => {
@@ -96,7 +94,7 @@ export const BitableKanbanView = <T extends { id: string }>({
     <div className="w-full h-full overflow-x-auto p-4 bg-slate-100/70 select-none">
       <div className="flex gap-4 min-w-max items-start">
         {kanbanGroups.map((group) => {
-          // 精确匹配优先，其次按关键词包含匹配（实际值常带后缀，如「已完成（含返工）」）
+          // 精确匹配优先，其次按关键词模糊匹配（实际值常带后缀，如「已核对通过 (中建国际签认)」）
           const colorClass =
             optionColors[group.title] ||
             (Object.keys(optionColors).find(
@@ -156,9 +154,9 @@ export const BitableKanbanView = <T extends { id: string }>({
                         }`}
                       >
                         {/* Top: 主字段 + 状态 */}
-                        <div className="flex items-start justify-between text-[11px] mb-1.5 gap-2">
+                        <div className="flex items-center justify-between text-[11px] mb-1.5 gap-2">
                           <span
-                            className="text-[12.5px] font-semibold leading-snug text-slate-800 line-clamp-2"
+                            className="font-mono font-bold text-slate-800 truncate"
                             title={`${card.titleLabel}：${card.title}`}
                           >
                             {card.title}

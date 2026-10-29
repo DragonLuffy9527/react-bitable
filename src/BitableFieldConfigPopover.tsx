@@ -14,12 +14,13 @@ interface BitableFieldConfigPopoverProps<T> {
   onRenameColumn?: (colId: string, newLabel: string) => void;
   onDeleteColumn?: (colId: string) => void;
   onToggleColumnLock?: (colId: string) => void;
+  /** 后端固定字段判定：命中的已锁定列锁图标显示红色（不可解锁），见 wiki/13 §13.18 */
+  isLockProtectedColumn?: (colId: string) => boolean;
   onToggleColumnFreeze?: (colId: string) => void;
   onUpdateColumnType?: (colId: string, newType: BitableFieldType, options?: BitableSelectOption[]) => void;
   onResetColumns?: () => void;
   onClose: () => void;
 }
-
 export const BitableFieldConfigPopover = <T,>({
   columns,
   onToggleVisibility,
@@ -28,6 +29,7 @@ export const BitableFieldConfigPopover = <T,>({
   onRenameColumn,
   onDeleteColumn,
   onToggleColumnLock,
+  isLockProtectedColumn,
   onToggleColumnFreeze,
   onUpdateColumnType,
   onResetColumns,
@@ -71,17 +73,18 @@ export const BitableFieldConfigPopover = <T,>({
 
   const visibleCount = columns.filter((c) => c.visible).length;
 
-  // Handle batch visibility
-  const handleToggleAll = (showAll: boolean) => {
+  // Handle batch visibility（全选：当前视图全部字段显示；不提供「全隐」——隐藏字段总是个别操作）
+  const handleShowAll = () => {
     columns.forEach((col) => {
-      if (col.visible !== showAll) {
+      if (!col.visible) {
         onToggleVisibility(col.id);
       }
     });
   };
 
   const handleStartRename = (col: BitableColumnConfig<T>) => {
-    if (col.type === 'action' || !onRenameColumn || col.isLocked || col.id === 'code') return;
+    // 主键（id === 'code'）允许改名，仅 type=action 与显式锁定的字段不可改名
+    if (!onRenameColumn || col.isLocked) return;
     setEditingColId(col.id);
     setNewEditingColName(col.label);
     setConfirmDeleteColId(null);
@@ -122,14 +125,33 @@ export const BitableFieldConfigPopover = <T,>({
     if (!trimmed) return;
 
     const fieldId = `custom_${Date.now()}`;
+    // 单选与多选共用同一份候选项目录
     const parsedOptions =
-      newFieldType === 'select' ? parseSelectOptions(newFieldOptionsRaw) : undefined;
+      newFieldType === 'select' || newFieldType === 'multiSelect'
+        ? parseSelectOptions(newFieldOptionsRaw)
+        : undefined;
+
+    // 按类型给一个能装下内容的最小列宽，避免新建后立刻出现省略号
+    const minWidth =
+      newFieldType === 'date'
+        ? '120px'
+        : newFieldType === 'number'
+        ? '100px'
+        : newFieldType === 'boolean'
+        ? '96px'
+        : newFieldType === 'multiSelect'
+        ? '168px'
+        : newFieldType === 'user' || newFieldType === 'group'
+        ? '176px'
+        : newFieldType === 'url'
+        ? '184px'
+        : '140px';
 
     onAddCustomColumn({
       id: fieldId,
       label: trimmed,
       type: newFieldType,
-      minWidth: newFieldType === 'date' ? '120px' : newFieldType === 'number' ? '100px' : '140px',
+      minWidth,
       editable: !newFieldIsLocked,
       isLocked: newFieldIsLocked,
       sortable: true,
@@ -146,23 +168,36 @@ export const BitableFieldConfigPopover = <T,>({
 
   const handleSaveOptions = (colId: string) => {
     const parsed = parseSelectOptions(optionsEditingRaw);
+    // 候选项目录对「单选 / 多选」通用，保存时不能把多选列打回单选
+    const targetType: BitableFieldType =
+      columns.find((c) => c.id === colId)?.type === 'multiSelect' ? 'multiSelect' : 'select';
     if (onUpdateColumnType && parsed.length > 0) {
-      onUpdateColumnType(colId, 'select', parsed);
+      onUpdateColumnType(colId, targetType, parsed);
     }
     setOptionsEditingColId(null);
   };
 
+  /**
+   * 可新建/可切换的字段类型，顺序对齐飞书多维表的「常规」分组。
+   * 本平台**不提供**「公式」与「查找引用」（都需要后端解析引擎，纯前端只能造假数据）；
+   * `action`（后台字段）由后台程序产生，也不在可选项中。
+   */
   const availableFieldTypes: BitableFieldType[] = [
     'text',
-    'number',
     'select',
+    'multiSelect',
+    'user',
+    'group',
     'date',
+    'attachment',
+    'number',
     'boolean',
+    'url',
     'badge'
   ];
 
   return (
-    <div className="absolute left-0 top-full mt-1.5 w-[560px] bg-white border border-slate-200 rounded-xl shadow-2xl z-50 p-3.5 select-none text-slate-800 text-[12px] animate-in fade-in zoom-in-95 duration-100">
+    <div className="absolute left-0 top-full mt-1.5 w-[560px] max-h-[calc(100vh-90px)] overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-2xl z-50 p-3.5 select-none text-slate-800 text-[12px] animate-in fade-in zoom-in-95 duration-100">
       {/* Header */}
       <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
         <div className="flex items-center gap-2">
@@ -226,19 +261,11 @@ export const BitableFieldConfigPopover = <T,>({
         <div className="flex items-center gap-1 shrink-0">
           <button
             type="button"
-            onClick={() => handleToggleAll(true)}
+            onClick={handleShowAll}
             className="h-7 px-2 text-[11px] text-slate-600 hover:text-[#005BAC] hover:bg-blue-50 rounded border border-slate-200 cursor-pointer transition-colors"
-            title="全部勾选显示"
+            title="全部在本视图显示"
           >
             全选
-          </button>
-          <button
-            type="button"
-            onClick={() => handleToggleAll(false)}
-            className="h-7 px-2 text-[11px] text-slate-600 hover:text-rose-600 hover:bg-rose-50 rounded border border-slate-200 cursor-pointer transition-colors"
-            title="全部取消显示"
-          >
-            全隐
           </button>
         </div>
       </div>
@@ -266,11 +293,19 @@ export const BitableFieldConfigPopover = <T,>({
             const originalIndex = columns.findIndex((c) => c.id === col.id);
             const isEditing = editingColId === col.id;
             const isDeleting = confirmDeleteColId === col.id;
-            const isLocked = !!col.isLocked || !col.editable;
+            // 改名只受「显式锁定」约束：editable:false 只代表单元格只读（如系统主键），
+            // 不应连带封掉改名入口，否则用户会看到灰铅笔却不知原因。
+            const isRenameBlocked = !!col.isLocked;
+            // 「锁定」按钮只反映管理员是否显式加锁（主键只读 ≠ 已锁定）
+            const isHardLocked = !!col.isLocked;
+            // 三态锁图标：红 = 后端固定字段（不可解锁），黄 = 普通锁定，灰 = 未锁定
+            const isLockProtected = isHardLocked && !!isLockProtectedColumn?.(col.id);
             const typeMeta = BITABLE_FIELD_TYPE_META[col.type] || BITABLE_FIELD_TYPE_META.text;
             const isPrimary = col.id === 'code';
             const isAction = col.type === 'action';
             const canDelete = !isAction && !isPrimary;
+            // 改类型：显式锁定 or 主键（图号规则依赖文本型）；只读单元格字段仍可改类型
+            const isTypeLocked = isHardLocked || isPrimary;
 
             return (
               <div
@@ -352,7 +387,7 @@ export const BitableFieldConfigPopover = <T,>({
                         checked={col.visible}
                         onChange={() => onToggleVisibility(col.id)}
                         className="w-3.5 h-3.5 rounded border-slate-300 text-[#005BAC] focus:ring-0 cursor-pointer"
-                        title={col.visible ? '点击隐藏该字段' : '点击显示该字段'}
+                        title={col.visible ? '在当前视图隐藏该字段（不影响其他视图）' : '在当前视图显示该字段'}
                       />
                     </div>
 
@@ -381,17 +416,23 @@ export const BitableFieldConfigPopover = <T,>({
                     </div>
 
                     {/* Type Badge & Quick Dropdown Selector + Options Trigger */}
-                    <div className="w-28 shrink-0 flex items-center gap-1">
+                    <div className="w-36 shrink-0 flex items-center gap-1">
                       {!isAction ? (
                         <>
                           <div className="relative flex-1 min-w-0">
                             <div
                               className={`h-6 px-1.5 rounded flex items-center justify-between text-[11px] font-medium border transition-colors ${
-                                isLocked
+                                isTypeLocked
                                   ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed opacity-80'
                                   : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-blue-50 hover:text-[#005BAC] hover:border-blue-200 cursor-pointer shadow-2xs'
                               }`}
-                              title={isLocked ? '已锁定字段不可更改类型，请先解锁' : '点击切换字段类型'}
+                              title={
+                                isPrimary
+                                  ? '主键字段类型固定为文本（图号规则与台账匹配依赖它），不可更改'
+                                  : isHardLocked
+                                  ? '已锁定字段不可更改类型，请先解锁'
+                                  : '点击切换字段类型'
+                              }
                             >
                               <div className="flex items-center gap-1 min-w-0 truncate">
                                 <span className="material-symbols-outlined text-[13px] leading-none text-slate-500 shrink-0">
@@ -399,7 +440,7 @@ export const BitableFieldConfigPopover = <T,>({
                                 </span>
                                 <span className="truncate">{typeMeta.label}</span>
                               </div>
-                              {!isLocked && (
+                              {!isTypeLocked && (
                                 <span className="material-symbols-outlined text-[12px] leading-none text-slate-400 shrink-0">
                                   expand_more
                                 </span>
@@ -407,18 +448,16 @@ export const BitableFieldConfigPopover = <T,>({
                             </div>
 
                             {/* Transparent native select overlay for foolproof menu rendering across all containers */}
-                            {!isLocked && (
+                            {!isTypeLocked && (
                               <select
                                 value={col.type}
-                                disabled={isLocked}
+                                disabled={isTypeLocked}
                                 onChange={(e) => {
                                   const nextType = e.target.value as BitableFieldType;
-                                  if (nextType === 'select' && (!col.options || col.options.length === 0)) {
-                                    setOptionsEditingColId(col.id);
-                                    setOptionsEditingRaw('选项1, 选项2, 选项3');
-                                  } else {
-                                    onUpdateColumnType?.(col.id, nextType);
-                                  }
+                                  // 切到单选时立刻生效：updateColumnType 会按该列现有数据的去重值
+                                  // 自动建选项并配好色，用户点完就能看到彩色胶囊。
+                                  // （旧逻辑只弹选项编辑器、不真正改类型，用户不填选项就永远还是文本列）
+                                  onUpdateColumnType?.(col.id, nextType);
                                 }}
                                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer text-[12px]"
                                 title="切换字段类型"
@@ -432,13 +471,13 @@ export const BitableFieldConfigPopover = <T,>({
                             )}
                           </div>
 
-                          {/* Quick Options configuration button for select fields */}
-                          {col.type === 'select' && (
+                          {/* Quick Options configuration button for select / multiSelect fields */}
+                          {(col.type === 'select' || col.type === 'multiSelect') && (
                             <button
                               type="button"
-                              disabled={isLocked}
+                              disabled={isTypeLocked}
                               onClick={() => {
-                                if (!isLocked) {
+                                if (!isTypeLocked) {
                                   setOptionsEditingColId(col.id);
                                   setOptionsEditingRaw(
                                     (col.options && col.options.length > 0)
@@ -448,18 +487,24 @@ export const BitableFieldConfigPopover = <T,>({
                                 }
                               }}
                               className={`w-6 h-6 rounded border flex items-center justify-center shrink-0 transition-colors ${
-                                isLocked
+                                isTypeLocked
                                   ? 'text-slate-300 border-slate-200 bg-slate-50 cursor-not-allowed'
                                   : 'text-[#005BAC] bg-blue-50 hover:bg-blue-100 border-blue-200 cursor-pointer shadow-2xs'
                               }`}
-                              title={isLocked ? '字段已锁定，不可编辑选项' : '配置单选项候选项列表'}
+                              title={isTypeLocked ? '字段已锁定，不可编辑选项' : '配置候选项列表（单选 / 多选通用）'}
                             >
                               <span className="material-symbols-outlined text-[13px]">tune</span>
                             </button>
                           )}
                         </>
                       ) : (
-                        <span className="w-full text-center text-[11px] text-slate-400 font-medium">操作列</span>
+                        <span
+                          className="w-full h-6 rounded flex items-center justify-center gap-1 text-[11px] font-medium text-slate-500 bg-slate-100 border border-slate-200 cursor-help"
+                          title="后台字段：由后台程序参与计算与匹配（附件解析、图纸关联、操作入口），类型由程序决定，前端不可修改"
+                        >
+                          <span className="material-symbols-outlined text-[12px] leading-none shrink-0">dns</span>
+                          <span className="truncate">后台字段</span>
+                        </span>
                       )}
                     </div>
 
@@ -467,7 +512,7 @@ export const BitableFieldConfigPopover = <T,>({
                     <div className="w-[172px] shrink-0 flex items-center justify-end gap-1">
                       {/* 1. Lock column (w-7 shrink-0) */}
                       <div className="w-7 flex items-center justify-center shrink-0">
-                        {!isAction && onToggleColumnLock ? (
+                        {onToggleColumnLock ? (
                           <button
                             type="button"
                             onClick={() => {
@@ -475,18 +520,26 @@ export const BitableFieldConfigPopover = <T,>({
                               setActiveTypeMenuColId(null);
                             }}
                             className={`w-6 h-6 rounded transition-all cursor-pointer flex items-center justify-center border shrink-0 ${
-                              isLocked
+                              isLockProtected
+                                ? 'text-red-700 bg-red-50 border-red-300 hover:bg-red-100 shadow-2xs font-bold'
+                                : isHardLocked
                                 ? 'text-amber-800 bg-amber-50 border-amber-300 hover:bg-amber-100 shadow-2xs font-bold'
                                 : 'text-slate-400 bg-slate-50 border-slate-200 hover:text-slate-700 hover:bg-slate-100'
                             }`}
                             title={
-                              isLocked
+                              isLockProtected
+                                ? '系统固定字段（识别来源），列定义受保护，不可解锁，也不可修改表中数据'
+                                : isHardLocked
                                 ? '当前【已锁定受控】（只读保护：禁止修改表格内容、禁止重命名与删除）。点击解锁'
+                                : isPrimary
+                                ? '当前【未锁定】。主键字段本身不可删除、类型固定，但可改名；点击可加锁保护'
+                                : isAction
+                                ? '当前【未锁定】。按钮列不支持行内编辑，但可改名称、可冻结；点击锁定可保护其名称'
                                 : '当前【未锁定】（允许行内编辑与修改）。点击锁定保护此字段'
                             }
                           >
-                            <span className={`material-symbols-outlined text-[13px] leading-none ${isLocked ? 'text-amber-700 font-bold' : 'text-slate-400'}`}>
-                              {isLocked ? 'lock' : 'lock_open'}
+                            <span className={`material-symbols-outlined text-[13px] leading-none ${isLockProtected ? 'text-red-700 font-bold' : isHardLocked ? 'text-amber-700 font-bold' : 'text-slate-400'}`}>
+                              {isHardLocked ? 'lock' : 'lock_open'}
                             </span>
                           </button>
                         ) : (
@@ -496,7 +549,7 @@ export const BitableFieldConfigPopover = <T,>({
 
                       {/* 2. Freeze column (w-7 shrink-0) */}
                       <div className="w-7 flex items-center justify-center shrink-0">
-                        {!isAction && onToggleColumnFreeze ? (
+                        {onToggleColumnFreeze ? (
                           <button
                             type="button"
                             onClick={() => {
@@ -519,13 +572,13 @@ export const BitableFieldConfigPopover = <T,>({
                         )}
                       </div>
 
-                      {/* 3. Rename column (w-7 shrink-0) */}
+                      {/* 3. Rename column (w-7 shrink-0)（主键允许改名，仅禁止删除） */}
                       <div className="w-7 flex items-center justify-center shrink-0">
-                        {!isAction && !isPrimary && onRenameColumn ? (
-                          isLocked ? (
+                        {onRenameColumn ? (
+                          isRenameBlocked ? (
                             <div
                               className="w-6 h-6 rounded flex items-center justify-center text-slate-300 cursor-not-allowed shrink-0"
-                              title="字段已锁定，不可修改名称"
+                              title="字段已锁定，不可修改名称（点击左侧锁图标可解锁）"
                             >
                               <span className="material-symbols-outlined text-[13px]">edit</span>
                             </div>
@@ -534,7 +587,7 @@ export const BitableFieldConfigPopover = <T,>({
                               type="button"
                               onClick={() => handleStartRename(col)}
                               className="w-6 h-6 rounded text-slate-400 hover:text-[#005BAC] hover:bg-blue-50 transition-all cursor-pointer flex items-center justify-center shrink-0"
-                              title="修改字段名称"
+                              title={isPrimary ? '修改字段名称（主键可改名，但不可删除）' : '修改字段名称'}
                             >
                               <span className="material-symbols-outlined text-[13px]">edit</span>
                             </button>
@@ -542,7 +595,7 @@ export const BitableFieldConfigPopover = <T,>({
                         ) : (
                           <div
                             className="w-6 h-6 rounded flex items-center justify-center text-slate-200 cursor-not-allowed shrink-0"
-                            title={isAction ? '操作列' : '系统主键不可重命名'}
+                            title="当前页面未提供字段改名能力"
                           >
                             <span className="material-symbols-outlined text-[13px]">edit</span>
                           </div>
@@ -552,7 +605,7 @@ export const BitableFieldConfigPopover = <T,>({
                       {/* 4. Delete column (w-7 shrink-0) */}
                       <div className="w-7 flex items-center justify-center shrink-0">
                         {canDelete && onDeleteColumn ? (
-                          isLocked ? (
+                          isHardLocked ? (
                             <div
                               className="w-6 h-6 rounded flex items-center justify-center text-slate-300 cursor-not-allowed shrink-0"
                               title="字段已锁定，不可删除，请先解锁"
@@ -575,7 +628,7 @@ export const BitableFieldConfigPopover = <T,>({
                         ) : (
                           <div
                             className="w-6 h-6 rounded flex items-center justify-center text-slate-200 cursor-not-allowed shrink-0"
-                            title={isAction ? '操作列不可删除' : '系统核心主键不可删除'}
+                            title={isAction ? '后台字段不可删除（后台程序依赖此列做计算与匹配）' : '系统核心主键不可删除'}
                           >
                             <span className="material-symbols-outlined text-[13px]">delete</span>
                           </div>
@@ -734,41 +787,46 @@ export const BitableFieldConfigPopover = <T,>({
               />
             </div>
 
-            {/* Field Type Selection */}
+            {/* Field Type Selection（下拉选择，避免平铺把确认按钮挤出弹层） */}
             <div>
               <label className="block text-[10.5px] font-medium text-slate-600 mb-1">
                 字段类型
               </label>
-              <div className="grid grid-cols-3 gap-1.5">
-                {availableFieldTypes.map((typeKey) => {
-                  const meta = BITABLE_FIELD_TYPE_META[typeKey];
-                  const isSelected = newFieldType === typeKey;
-                  return (
-                    <button
-                      key={typeKey}
-                      type="button"
-                      onClick={() => setNewFieldType(typeKey)}
-                      className={`h-7 px-2 flex items-center gap-1.5 rounded-md border text-[11px] font-medium transition-all cursor-pointer ${
-                        isSelected
-                          ? 'bg-blue-50 border-[#005BAC] text-[#005BAC] font-bold shadow-2xs'
-                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100/70'
-                      }`}
-                    >
-                      <span className="material-symbols-outlined text-[14px] leading-none">
-                        {meta.icon}
-                      </span>
-                      <span>{meta.label}</span>
-                    </button>
-                  );
-                })}
+              <div className="relative">
+                <div className="h-7 px-2 flex items-center justify-between text-[11px] font-medium bg-white border border-slate-200 rounded-md pointer-events-none">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="material-symbols-outlined text-[14px] leading-none text-[#005BAC] shrink-0">
+                      {BITABLE_FIELD_TYPE_META[newFieldType].icon}
+                    </span>
+                    <span className="truncate text-slate-800">
+                      {BITABLE_FIELD_TYPE_META[newFieldType].label}
+                    </span>
+                  </div>
+                  <span className="material-symbols-outlined text-[13px] leading-none text-slate-400 shrink-0">
+                    expand_more
+                  </span>
+                </div>
+                {/* 透明原生 select 覆盖：与行内「类型与选项」同款，跨容器渲染最稳 */}
+                <select
+                  value={newFieldType}
+                  onChange={(e) => setNewFieldType(e.target.value as BitableFieldType)}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer text-[12px]"
+                  title="选择字段类型"
+                >
+                  {availableFieldTypes.map((typeKey) => (
+                    <option key={typeKey} value={typeKey}>
+                      {BITABLE_FIELD_TYPE_META[typeKey].label} - {BITABLE_FIELD_TYPE_META[typeKey].desc}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
-            {/* If Select type, show options input */}
-            {newFieldType === 'select' && (
+            {/* If Select / MultiSelect type, show options input */}
+            {(newFieldType === 'select' || newFieldType === 'multiSelect') && (
               <div className="p-2 bg-white rounded-lg border border-slate-200 space-y-1.5">
                 <label className="block text-[10.5px] font-medium text-slate-600">
-                  下拉单选项 (以逗号分隔)
+                  候选项 (以逗号分隔，{newFieldType === 'multiSelect' ? '可多选' : '单选'})
                 </label>
                 <input
                   type="text"

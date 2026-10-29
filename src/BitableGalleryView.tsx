@@ -125,9 +125,14 @@ export const BitableGalleryView = <T extends { id: string }>({
             card.tags.find((f) => f.type === 'select')?.text || card.fields[2]?.text || '';
           const cover = resolveCover(item);
 
-          // 状态词义 → 胶囊色调：异常类红、完成类绿、其余中性
-          const isDiff = /阻塞|异常|失败|驳回|延期|差异/.test(statusText);
-          const isApproved = /核准|归档|有效|通过|审定|完成|关闭/.test(statusText);
+          const isDiff = statusText.includes('差异');
+          const isApproved =
+            statusText.includes('核准') ||
+            statusText.includes('归档') ||
+            statusText.includes('有效') ||
+            statusText.includes('已通过') ||
+            statusText.includes('已审定') ||
+            statusText.includes('已完成');
 
           return (
             <div
@@ -206,22 +211,22 @@ export const BitableGalleryView = <T extends { id: string }>({
                     )}
                   </div>
                 ) : (
-                  /* ===== 兜底：无封面时的占位（取主字段首字 + 字段提示） ===== */
-                  <div className="absolute inset-0 bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center">
+                  /* ===== 兜底：CAD 蓝图占位 ===== */
+                  <div className="absolute inset-0 bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center">
                     <div
-                      className="absolute inset-0 opacity-40"
+                      className="absolute inset-0 opacity-15"
                       style={{
                         backgroundImage:
-                          'linear-gradient(#cbd5e1 1px, transparent 1px), linear-gradient(90deg, #cbd5e1 1px, transparent 1px)',
+                          'linear-gradient(#38bdf8 1px, transparent 1px), linear-gradient(90deg, #38bdf8 1px, transparent 1px)',
                         backgroundSize: '16px 16px'
                       }}
                     />
-                    <div className="flex flex-col items-center justify-center z-10 transition-transform group-hover:scale-105 duration-200">
-                      <span className="text-[26px] font-semibold text-slate-400 leading-none">
-                        {(card.title || card.titleLabel || '?').trim().slice(0, 1)}
+                    <div className="flex flex-col items-center justify-center text-sky-400/90 z-10 transition-transform group-hover:scale-105 duration-200">
+                      <span className="material-symbols-outlined text-[36px] drop-shadow-md">
+                        architecture
                       </span>
-                      <span className="text-[10px] font-medium tracking-wide text-slate-400 mt-1.5 max-w-[180px] truncate px-2">
-                        {card.titleLabel || '暂无封面'}
+                      <span className="text-[10px] font-mono tracking-wider text-sky-200/70 mt-1 uppercase">
+                        {coverHint ? `${coverHint} · CAD 视图` : 'CAD 视图'}
                       </span>
                     </div>
                   </div>

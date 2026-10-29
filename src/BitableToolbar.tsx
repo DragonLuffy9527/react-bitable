@@ -27,6 +27,13 @@ interface BitableToolbarProps<T> {
   onAddRecord: () => void;
   onDeleteRecord?: () => void;
   selectedRecordCount?: number;
+  // Undo / Redo（Ctrl+Z / Ctrl+Shift+Z），不传则不显示
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  undoLabel?: string;
+  redoLabel?: string;
   // View operations
   onRenameView?: (newName: string) => void;
   onDuplicateView?: () => void;
@@ -40,6 +47,8 @@ interface BitableToolbarProps<T> {
   onRenameColumn?: (colId: string, newLabel: string) => void;
   onDeleteColumn?: (colId: string) => void;
   onToggleColumnLock?: (colId: string) => void;
+  /** 后端固定字段判定：命中的已锁定列锁图标显示红色（不可解锁），见 wiki/13 §13.18 */
+  isLockProtectedColumn?: (colId: string) => boolean;
   onToggleColumnFreeze?: (colId: string) => void;
   onUpdateColumnType?: (colId: string, newType: BitableFieldType, options?: BitableSelectOption[]) => void;
   onResetColumns?: () => void;
@@ -75,6 +84,12 @@ export const BitableToolbar = <T,>({
   onAddRecord,
   onDeleteRecord,
   selectedRecordCount = 0,
+  onUndo,
+  onRedo,
+  canUndo = false,
+  canRedo = false,
+  undoLabel = '',
+  redoLabel = '',
   onRenameView,
   onDuplicateView,
   onResetView,
@@ -86,6 +101,7 @@ export const BitableToolbar = <T,>({
   onRenameColumn,
   onDeleteColumn,
   onToggleColumnLock,
+  isLockProtectedColumn,
   onToggleColumnFreeze,
   onUpdateColumnType,
   onResetColumns,
@@ -263,6 +279,40 @@ export const BitableToolbar = <T,>({
 
         <div className="h-4 w-px bg-slate-200 mx-0.5" />
 
+        {/* ↶ 撤销 / ↷ 重做（Ctrl+Z / Ctrl+Shift+Z） */}
+        {onUndo && (
+          <div className="flex items-center gap-0.5 shrink-0">
+            <button
+              type="button"
+              onClick={onUndo}
+              disabled={!canUndo}
+              className={`h-7 w-7 flex items-center justify-center rounded border transition-colors ${
+                canUndo
+                  ? 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 cursor-pointer'
+                  : 'bg-white text-slate-300 border-slate-100 cursor-not-allowed'
+              }`}
+              title={canUndo ? `撤销：${undoLabel}（Ctrl+Z）` : '没有可撤销的操作'}
+            >
+              <span className="material-symbols-outlined text-[16px] leading-none">undo</span>
+            </button>
+            {onRedo && (
+              <button
+                type="button"
+                onClick={onRedo}
+                disabled={!canRedo}
+                className={`h-7 w-7 flex items-center justify-center rounded border transition-colors ${
+                  canRedo
+                    ? 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 cursor-pointer'
+                    : 'bg-white text-slate-300 border-slate-100 cursor-not-allowed'
+                }`}
+                title={canRedo ? `重做：${redoLabel}（Ctrl+Shift+Z）` : '没有可重做的操作'}
+              >
+                <span className="material-symbols-outlined text-[16px] leading-none">redo</span>
+              </button>
+            )}
+          </div>
+        )}
+
         {/* ⚙ 字段配置 */}
         <div className="relative">
           <button
@@ -298,6 +348,7 @@ export const BitableToolbar = <T,>({
               onRenameColumn={onRenameColumn}
               onDeleteColumn={onDeleteColumn}
               onToggleColumnLock={onToggleColumnLock}
+              isLockProtectedColumn={isLockProtectedColumn}
               onToggleColumnFreeze={onToggleColumnFreeze}
               onUpdateColumnType={onUpdateColumnType}
               onResetColumns={onResetColumns}
@@ -344,7 +395,7 @@ export const BitableToolbar = <T,>({
             <BitableViewConfigPopover
               activeView={activeView}
               totalViews={totalViews}
-              isMasterView={isMasterView}
+              isMasterView={isMasterView || activeView.name === '总表'}
               columns={columns}
               onRenameView={onRenameView || (() => {})}
               onUpdateViewConfig={onUpdateViewConfig}
@@ -597,7 +648,7 @@ export const BitableToolbar = <T,>({
           <button
             type="button"
             onClick={() => setSearchExpanded(true)}
-            data-hint="搜索数据"
+            data-hint="搜索台账数据"
             className="h-7 w-7 flex items-center justify-center rounded border border-slate-200 bg-slate-50/70 hover:bg-white text-slate-500 hover:text-[#005BAC] cursor-pointer transition-colors shadow-2xs"
           >
             <span className="material-symbols-outlined text-[16px]">search</span>

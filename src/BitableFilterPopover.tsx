@@ -18,7 +18,10 @@ export const BitableFilterPopover = <T,>({
   onUpdateLogic,
   onClose
 }: BitableFilterPopoverProps<T>) => {
-  const filterableColumns = columns.filter((c) => c.filterable !== false);
+  // 筛选下拉纳入所有真实字段（2026-10-28 用户要求）：
+  // 求值是通用字符串匹配（String(row[fieldId])），任何列都能筛；
+  // 仅排除 action（附件/操作）列——它是按钮/文件入口，无业务值可筛。
+  const filterableColumns = columns.filter((c) => c.type !== 'action');
 
   const handleAddRule = () => {
     const firstCol = filterableColumns[0]?.id || '';

@@ -13,22 +13,7 @@ import {
   BitableFieldType,
   BitableSelectOption
 } from './types';
-
-/**
- * SSR 安全的 storage 适配。
- * 多维表的列配置 / 视图 / 行数据都持久化在 localStorage；
- * 在没有 window 的环境（SSR、Node 预渲染、Web Worker）下降级为空实现，
- * 表格仍然可用（只是不持久化），不会因为 `localStorage is not defined` 崩掉。
- */
-const memoryFallback = new Map<string, string>();
-const storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> =
-  typeof localStorage !== 'undefined'
-    ? localStorage
-    : {
-        getItem: (key: string) => memoryFallback.get(key) ?? null,
-        setItem: (key: string, value: string) => void memoryFallback.set(key, value),
-        removeItem: (key: string) => void memoryFallback.delete(key)
-      };
+import { toValueList } from './cellValue';
 
 /**
  * 自动补的「父级记录」字段 id。
@@ -36,6 +21,20 @@ const storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> =
  * 所以拖拽建立子记录时自动补这个隐藏字段。
  */
 const PARENT_FIELD_ID = 'parentRecordKey';
+
+/**
+ * 单选项配色盘。文本列改成单选时，按现有数据的去重值自动建选项并依次取色，
+ * 这样「改成单选」立刻就能看到每种状态各自的底色，不用手填一遍选项。
+ * 与 BitableFieldConfigPopover.parseSelectOptions 用同一套色阶，保持一致观感。
+ */
+export const SELECT_OPTION_PALETTE = [
+  'bg-blue-50 text-[#005BAC] border-blue-200',
+  'bg-emerald-50 text-emerald-700 border-emerald-200',
+  'bg-purple-50 text-purple-700 border-purple-200',
+  'bg-amber-50 text-amber-700 border-amber-200',
+  'bg-cyan-50 text-cyan-700 border-cyan-200',
+  'bg-rose-50 text-rose-700 border-rose-200'
+];
 
 interface UseBitableOptions<T> {
   storageKey: string;
@@ -49,6 +48,26 @@ interface UseBitableOptions<T> {
    * 避免「代码改了名、界面上还是旧列名」。
    */
   schemaVersion?: string;
+  /** 撤销 / 重做的即时反馈（一般直接传页面的 onShowToast） */
+  onHistoryToast?: (message: string) => void;
+  /**
+   * 把页面持有的勾选集（Excel 式行多选：Ctrl 点选 / Shift 范围选 / 复选框 / 全选）
+   * 注册进撤销历史：传入后勾选变化会自动进栈，撤销/重做会同步还原勾选。
+   */
+  selectionState?: {
+    checkedIds: Record<string, boolean>;
+    setCheckedIds: (next: Record<string, boolean>) => void;
+  };
+}
+
+/** 一步撤销的快照：只有三个数组引用，靠不可变更新的结构性共享复用内存 */
+interface BitableHistoryEntry<T> {
+  data: T[];
+  columns: BitableColumnConfig<T>[];
+  views: BitableViewConfig[];
+  label: string;
+  /** 页面注册的勾选集快照（未注册 selectionState 时为 undefined，还原时跳过） */
+  checkedIds?: Record<string, boolean>;
 }
 
 export function useBitable<T extends { id: string }>({
@@ -57,30 +76,32 @@ export function useBitable<T extends { id: string }>({
   defaultColumns,
   presetViews,
   onDataChange,
-  schemaVersion
+  schemaVersion,
+  onHistoryToast,
+  selectionState
 }: UseBitableOptions<T>) {
   /**
    * 1. Data state
    *
-   * 多账套 / 多项目场景下，调用方会在 `storageKey` 里拼上当前上下文 id，切换时 key 会变。
-   * 如果只在挂载时读一次存储，切上下文后表格仍显示上一个上下文的行，
-   * 甚至把两边的行混在一起。这里把读取逻辑抽成函数，
+   * 三个台账页都用 `storageKey` 带上 `activeSite.id`，切地盘时 key 会变。
+   * 早期版本只在挂载时读一次 localStorage，导致切地盘后表格仍显示上一个地盘的行，
+   * 甚至把两个地盘的行混在一起。这里把读取逻辑抽成函数，
    * 并在 storageKey 变化时整体重置（见下方 useEffect）。
    */
   const loadData = (): T[] => {
     try {
       /**
        * schemaVersion 同时也是「内置示例数据」的版本号：
-       * 版本号变了说明代码里的初始数据已经换过，
+       * 版本号变了说明代码里的初始数据（Mock 行）已经换过，
        * 此时必须整体回落到 initialData，否则老浏览器会一直显示上一版的行内容。
        * 版本号一致时保留用户的行内编辑。
        */
-      const savedSchema = storage.getItem(`${storageKey}_schema_version`);
+      const savedSchema = localStorage.getItem(`${storageKey}_schema_version`);
       if (schemaVersion && savedSchema !== schemaVersion) {
         return initialData;
       }
 
-      const savedData = storage.getItem(`${storageKey}_data`);
+      const savedData = localStorage.getItem(`${storageKey}_data`);
       if (savedData) {
         const parsed: T[] = JSON.parse(savedData);
         // 代码侧新增字段时，用 initialData 按 id 补齐老数据里缺失的键（只填空缺，不覆盖已填内容）
@@ -126,15 +147,20 @@ export function useBitable<T extends { id: string }>({
   // 2. Custom & Active Columns
   const loadColumns = (): BitableColumnConfig<T>[] => {
     try {
-      const savedDeleted = storage.getItem(`${storageKey}_deleted_col_ids`);
+      const savedDeleted = localStorage.getItem(`${storageKey}_deleted_col_ids`);
       const deletedIds = new Set<string>(savedDeleted ? JSON.parse(savedDeleted) : []);
 
-      const savedCols = storage.getItem(`${storageKey}_columns`);
+      const savedCols = localStorage.getItem(`${storageKey}_columns`);
       if (savedCols) {
         const parsed: BitableColumnConfig<T>[] = JSON.parse(savedCols);
 
+        // 锁定状态以独立 key 为准（见下方持久化 effect）；该 key 不存在时（首次升级/老数据）
+        // 才回退到列 schema 的 isLocked。这样旧版写进 `_columns` 的错误 isLocked 不再生效。
+        const savedLockedIds = localStorage.getItem(`${storageKey}_locked_col_ids`);
+        const lockedIds: Set<string> | null = savedLockedIds ? new Set(JSON.parse(savedLockedIds)) : null;
+
         // 字段表结构升级：整体回落到代码定义的列（保留用户自定义列与删除记录）
-        const savedSchema = storage.getItem(`${storageKey}_schema_version`);
+        const savedSchema = localStorage.getItem(`${storageKey}_schema_version`);
         if (schemaVersion && savedSchema !== schemaVersion) {
           const customs = parsed.filter((c) => c.isCustom && !deletedIds.has(c.id));
           return [...defaultColumns, ...customs];
@@ -145,27 +171,33 @@ export function useBitable<T extends { id: string }>({
         const missingDefaults = defaultColumns.filter(
           (d) => !existingIds.has(d.id) && !deletedIds.has(d.id)
         );
-        return [
+        const merged: BitableColumnConfig<T>[] = [
           ...parsed
             .filter(
               (col) =>
                 !deletedIds.has(col.id) &&
-                // 代码侧已经删掉/替换掉的默认列
+                // 代码侧已经删掉/替换掉的默认列（如被「图纸附件」替换的 actions）
                 // 不能再留着，否则 original 找不到 render，会渲染成一列空白
                 (col.isCustom || defaultColumns.some((d) => d.id === col.id))
             )
             .map((col) => {
               const original = defaultColumns.find((d) => d.id === col.id);
-              const isLocked =
-                col.isLocked !== undefined
-                  ? col.isLocked
-                  : (original?.isLocked ?? (original?.editable === false));
-              const isEditable = !isLocked;
+              // isLocked 只表达「管理员是否显式加锁」，editable 只表达「单元格是否可编辑」。
+              // 首次升级（无 _locked_col_ids）时只信代码默认，**不读** _columns 里的 isLocked——
+              // 那是旧版把 editable:false 推导出来的脏值，读了会立刻被写进新 key 永久固化。
+              const isLocked = lockedIds
+                ? lockedIds.has(col.id)
+                : (original?.isLocked ?? false);
+              const isEditable = original?.editable ?? true;
               const isCustom = !!col.isCustom;
-              // Admin-configured fields CANNOT have their names changed (always enforce original code label)
-              const resolvedLabel = (isEditable || isCustom)
-                ? (col.label || original?.label || '')
-                : (original?.label || col.label || '');
+              // 名称以已保存的 label 为准：改名入口只受显式锁定约束（见 renameColumn），
+              // 因此 localStorage 里的 label 一定是合法值，不再按 editable 回落到代码默认名。
+              const resolvedLabel = col.label || original?.label || '';
+              const resolvedType = col.type || original?.type || 'text';
+              // 用户把字段类型改掉后，代码里那份原类型专属的 render 必须失效——
+              // 否则展示层仍走旧外观（文本列改单选后单元格还是纯灰字、选项配色不生效），
+              // 而且编辑器和展示会各说各话。判断依据是「存下来的 type 与代码默认 type 不同」。
+              const typeChangedByUser = !!original && resolvedType !== original.type;
 
               return {
                 ...original,
@@ -173,13 +205,14 @@ export function useBitable<T extends { id: string }>({
                 label: resolvedLabel,
                 isLocked,
                 editable: isEditable,
-                type: col.type || original?.type || 'text',
-                render: original?.render,
+                type: resolvedType,
+                render: typeChangedByUser ? undefined : original?.render,
                 options: col.options || original?.options
               };
             }),
           ...missingDefaults
         ];
+        return merged;
       }
     } catch {
       // ignore
@@ -192,23 +225,37 @@ export function useBitable<T extends { id: string }>({
   // 3. Views state
   const loadViews = (): BitableViewConfig[] => {
     try {
-      const savedViews = storage.getItem(`${storageKey}_views`);
+      // schemaVersion 变化时视图整体回落到代码预设：
+      // 否则被删除/更名的旧页签会永远残留在 localStorage（2026-10-28 修复：旧页签不随版本升级消失）
+      if (schemaVersion) {
+        const savedSchemaForViews = localStorage.getItem(`${storageKey}_schema_version`);
+        if (savedSchemaForViews && savedSchemaForViews !== schemaVersion) {
+          localStorage.removeItem(`${storageKey}_views`);
+          localStorage.removeItem(`${storageKey}_active_view_id`);
+          return presetViews.map((v) => ({ ...v }));
+        }
+      }
+      const savedViews = localStorage.getItem(`${storageKey}_views`);
       if (savedViews) {
         let parsed: BitableViewConfig[] = JSON.parse(savedViews);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          /**
-           * 主视图（presetViews[0]）恒定钉在第一位，且不可删除、不可改名。
-           * 这里只做「归位」：已存的同名视图挪回首位并保留用户对它的配置；
-           * 丢了就补一份新的。名字与图标完全以 presetViews[0] 为准，不做硬编码改名。
-           */
           const masterPreset = presetViews[0];
           if (masterPreset) {
-            const masterIdx = parsed.findIndex((v) => v.id === masterPreset.id);
-            if (masterIdx > 0) {
-              const [masterItem] = parsed.splice(masterIdx, 1);
+            // Find existing master tab or legacy names
+            const masterIdx = parsed.findIndex(
+              (v) =>
+                v.id === masterPreset.id ||
+                v.name === '总表' ||
+                v.name === '全部图纸总表' ||
+                v.name === '全部版本总表' ||
+                v.name === '全部 PS 文件'
+            );
+            if (masterIdx >= 0) {
+              const masterItem = { ...parsed[masterIdx], name: '总表', icon: 'grid_on' };
+              parsed.splice(masterIdx, 1);
               parsed.unshift(masterItem);
-            } else if (masterIdx < 0) {
-              parsed.unshift({ ...masterPreset });
+            } else {
+              parsed.unshift({ ...masterPreset, name: '总表', icon: 'grid_on' });
             }
           }
           const normalized = parsed.map((v) => ({
@@ -216,6 +263,7 @@ export function useBitable<T extends { id: string }>({
             viewType: v.viewType || 'grid',
             scope: v.scope || 'collaborative',
             isLocked: !!v.isLocked,
+            hiddenFieldIds: Array.isArray(v.hiddenFieldIds) ? v.hiddenFieldIds : [],
             groupRules:
               v.groupRules && v.groupRules.length > 0
                 ? v.groupRules
@@ -223,17 +271,22 @@ export function useBitable<T extends { id: string }>({
                 ? [{ id: 'rule-legacy', fieldId: v.groupByFieldId, direction: 'asc' as const }]
                 : []
           }));
+          // 系统总表固定为协作视图，历史数据若被存成个人视图则强制纠回
+          if (normalized.length > 0) {
+            normalized[0] = { ...normalized[0], scope: 'collaborative' };
+          }
           return normalized;
         }
       }
     } catch {
       // ignore
     }
-    return presetViews.map((v) => ({
+    const presetNormalized = presetViews.map((v) => ({
       ...v,
       viewType: v.viewType || 'grid',
       scope: v.scope || 'collaborative',
       isLocked: !!v.isLocked,
+      hiddenFieldIds: Array.isArray(v.hiddenFieldIds) ? v.hiddenFieldIds : [],
       groupRules:
         v.groupRules && v.groupRules.length > 0
           ? v.groupRules
@@ -241,6 +294,11 @@ export function useBitable<T extends { id: string }>({
           ? [{ id: 'rule-legacy', fieldId: v.groupByFieldId, direction: 'asc' as const }]
           : []
     }));
+    // 系统总表固定为协作视图
+    if (presetNormalized.length > 0) {
+      presetNormalized[0] = { ...presetNormalized[0], scope: 'collaborative' };
+    }
+    return presetNormalized;
   };
 
   const [views, setViews] = useState<BitableViewConfig[]>(loadViews);
@@ -249,7 +307,7 @@ export function useBitable<T extends { id: string }>({
 
   const loadActiveViewId = (): string => {
     try {
-      const savedActive = storage.getItem(`${storageKey}_active_view_id`);
+      const savedActive = localStorage.getItem(`${storageKey}_active_view_id`);
       if (savedActive) {
         return savedActive;
       }
@@ -261,11 +319,158 @@ export function useBitable<T extends { id: string }>({
 
   const [activeViewId, setActiveViewId] = useState<string>(loadActiveViewId);
 
+  // ==================== 撤销 / 重做 ====================
   /**
-   * 切换上下文（storageKey 变化）时整体重置表格状态。
+   * 快照式历史记录。
    *
-   * 不重置的话，上一个上下文的行、列配置、视图与分组都会留在界面上，
-   * 表现为「切到 B 项目后仍显示 A 项目的行，行数是两边之和」。
+   * 本 hook 里所有写操作都是不可变更新（`[...prev]` + `{...row}`，从不原地改行对象），
+   * 所以一步快照只要存 data / columns / views 三个数组引用即可，
+   * 与上一版共享未改动的行对象，50~60 步撤销栈几乎不占额外内存。
+   *
+   * 采用「监听引用变化」而不是在每个 mutator 里手写 pushHistory：
+   * 后者要在 20 多个写入口逐个补一行，漏一处就出现「这一步撤销不了」的死角；
+   * 现在新增写操作会自动进栈。
+   */
+  const HISTORY_LIMIT = 60;
+  const undoStackRef = useRef<BitableHistoryEntry<T>[]>([]);
+  const redoStackRef = useRef<BitableHistoryEntry<T>[]>([]);
+  // 勾选集用 ref 取最新值，避免快照 effect 因闭包过期拿到旧勾选
+  const selectionStateRef = useRef(selectionState);
+  selectionStateRef.current = selectionState;
+  const lastSnapshotRef = useRef<BitableHistoryEntry<T>>({
+    data,
+    columns,
+    views,
+    checkedIds: selectionState?.checkedIds,
+    label: '编辑记录'
+  });
+  /** 下一个被记入历史的操作名（由各 mutator 进来先 markHistory） */
+  const pendingLabelRef = useRef<string>('编辑记录');
+  /** 切地盘重置状态时不要记一步历史 */
+  const skipHistoryRef = useRef(false);
+  const [, bumpHistory] = useState(0);
+
+  const markHistory = (label: string) => {
+    pendingLabelRef.current = label;
+  };
+
+  useEffect(() => {
+    const selIds = selectionStateRef.current?.checkedIds;
+    if (skipHistoryRef.current) {
+      skipHistoryRef.current = false;
+      undoStackRef.current = [];
+      redoStackRef.current = [];
+      lastSnapshotRef.current = { data, columns, views, checkedIds: selIds, label: '切换地盘' };
+      pendingLabelRef.current = '编辑记录';
+      bumpHistory((v) => v + 1);
+      return;
+    }
+
+    const prev = lastSnapshotRef.current;
+    const dataChanged = prev.data !== data || prev.columns !== columns || prev.views !== views;
+    const selectionChanged = !!selectionStateRef.current && prev.checkedIds !== selIds;
+    if (!dataChanged && !selectionChanged) return;
+
+    // 纯勾选变化（无数据改动）也记一步，操作名固定为「勾选记录」；
+    // 与数据改动同一次批量更新发生时（如批量删除后清空勾选）合并为一步。
+    const label = dataChanged ? pendingLabelRef.current : '勾选记录';
+    undoStackRef.current.push({
+      data: prev.data,
+      columns: prev.columns,
+      views: prev.views,
+      checkedIds: prev.checkedIds,
+      label
+    });
+    if (undoStackRef.current.length > HISTORY_LIMIT) undoStackRef.current.shift();
+    redoStackRef.current = [];
+    lastSnapshotRef.current = { data, columns, views, checkedIds: selIds, label };
+    pendingLabelRef.current = '编辑记录';
+    // 让工具栏的「撤销/重做」可用态跟着刷新
+    bumpHistory((v) => v + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, columns, views, selectionState?.checkedIds]);
+
+  const applySnapshot = (snapshot: BitableHistoryEntry<T>) => {
+    // 先更新基线引用，回填动作本身就不会再被记成一步新的历史
+    lastSnapshotRef.current = snapshot;
+    setData(snapshot.data);
+    setColumns(snapshot.columns);
+    setViews(snapshot.views);
+    // 同步还原页面勾选集（仅当页面注册了 selectionState 且快照里带勾选）
+    const sel = selectionStateRef.current;
+    if (sel && snapshot.checkedIds !== undefined) {
+      sel.setCheckedIds(snapshot.checkedIds);
+    }
+    bumpHistory((v) => v + 1);
+  };
+
+  /** 撤销一步，返回被撤销操作的名称（无历史时返回 null） */
+  const undo = (): string | null => {
+    const snapshot = undoStackRef.current.pop();
+    if (!snapshot) return null;
+    redoStackRef.current.push({ ...lastSnapshotRef.current });
+    applySnapshot(snapshot);
+    return snapshot.label || '操作';
+  };
+
+  /** 重做一步，返回被重做操作的名称（无可重做时返回 null） */
+  const redo = (): string | null => {
+    const snapshot = redoStackRef.current.pop();
+    if (!snapshot) return null;
+    undoStackRef.current.push({ ...lastSnapshotRef.current });
+    applySnapshot(snapshot);
+    return snapshot.label || '操作';
+  };
+
+  const canUndo = undoStackRef.current.length > 0;
+  const canRedo = redoStackRef.current.length > 0;
+  const undoLabel = undoStackRef.current[undoStackRef.current.length - 1]?.label || '';
+  const redoLabel = redoStackRef.current[redoStackRef.current.length - 1]?.label || '';
+
+  // 快捷键：Ctrl/Cmd+Z 撤销、Ctrl/Cmd+Shift+Z 或 Ctrl+Y 重做
+  const undoActionRef = useRef(undo);
+  undoActionRef.current = undo;
+  const redoActionRef = useRef(redo);
+  redoActionRef.current = redo;
+  const historyToastRef = useRef(onHistoryToast);
+  historyToastRef.current = onHistoryToast;
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const key = e.key.toLowerCase();
+      const isUndo = key === 'z' && !e.shiftKey;
+      const isRedo = (key === 'z' && e.shiftKey) || key === 'y';
+      if (!isUndo && !isRedo) return;
+
+      // 输入框 / 多行文本里让浏览器原生撤销生效，不抢快捷键
+      const el = document.activeElement as HTMLElement | null;
+      const tag = el?.tagName;
+      if (
+        el &&
+        (el.isContentEditable ||
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT')
+      ) {
+        return;
+      }
+
+      const label = isRedo ? redoActionRef.current() : undoActionRef.current();
+      if (!label) return;
+      e.preventDefault();
+      historyToastRef.current?.(`${isRedo ? '已重做' : '已撤销'}：${label}`);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+  // ==================== 撤销 / 重做（end） ====================
+
+  /**
+   * 切换地盘（storageKey 变化）时整体重置表格状态。
+   *
+   * 不重置的话，上一个地盘的行、列配置、视图与分组都会留在界面上，
+   * 表现为「切到铜锣湾后仍显示启德的 A-101，行数是两地之和」。
    * 这里按新的 storageKey 重新读取各自的 localStorage 缓存，
    * 没有缓存时回落到代码定义的默认值。
    */
@@ -273,12 +478,14 @@ export function useBitable<T extends { id: string }>({
   useEffect(() => {
     if (prevStorageKeyRef.current === storageKey) return;
     prevStorageKeyRef.current = storageKey;
+    // 换地盘是「换一本书」，不能算作可撤销的一步
+    skipHistoryRef.current = true;
     setData(loadData());
     setColumns(loadColumns());
     setViews(loadViews());
     setActiveViewId(loadActiveViewId());
     setSearchQuery('');
-    // 已知 id 集合也要跟着换，否则增量并入逻辑会把新上下文的行追加到旧行后面
+    // 已知 id 集合也要跟着换，否则增量并入逻辑会把新地盘的行追加到旧行后面
     knownIdsRef.current = new Set(initialData.map((row) => row.id));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
@@ -288,15 +495,15 @@ export function useBitable<T extends { id: string }>({
     return views.find((v) => v.id === activeViewId) || views[0] || presetViews[0];
   }, [views, activeViewId, presetViews]);
 
-  // 当前视图是否为主视图（主视图 = 视图列表第一位，受保护：不可删除、不可改名）
+  // Check if current view is the protected master view ("总表")
   const isMasterView = useMemo(() => {
-    return activeViewId === views[0]?.id;
-  }, [activeViewId, views]);
+    return activeViewId === views[0]?.id || activeView?.name === '总表';
+  }, [activeViewId, views, activeView]);
 
   // Sync to localStorage
   useEffect(() => {
     try {
-      storage.setItem(`${storageKey}_data`, JSON.stringify(data));
+      localStorage.setItem(`${storageKey}_data`, JSON.stringify(data));
       onDataChange?.(data);
     } catch {
       // ignore
@@ -305,18 +512,33 @@ export function useBitable<T extends { id: string }>({
 
   useEffect(() => {
     try {
-      storage.setItem(`${storageKey}_columns`, JSON.stringify(columns.map(({ render, ...rest }) => rest)));
+      localStorage.setItem(`${storageKey}_columns`, JSON.stringify(columns.map(({ render, ...rest }) => rest)));
       if (schemaVersion) {
-        storage.setItem(`${storageKey}_schema_version`, schemaVersion);
+        localStorage.setItem(`${storageKey}_schema_version`, schemaVersion);
       }
     } catch {
       // ignore
     }
   }, [columns, storageKey, schemaVersion]);
 
+  /**
+   * 锁定状态单独持久化到 `_locked_col_ids`。
+   * 历史原因：旧版把 editable:false 推导成 isLocked:true 写进了 `_columns`，
+   * 导致主键/图名等系统字段在老浏览器里永远是「已锁定」，点解锁刷新又变回锁。
+   * 现在列 schema 里的 isLocked 只作为初始值，运行时以这个 id 集合为准。
+   */
   useEffect(() => {
     try {
-      storage.setItem(`${storageKey}_views`, JSON.stringify(views));
+      const lockedIds = columns.filter((c) => c.isLocked).map((c) => c.id);
+      localStorage.setItem(`${storageKey}_locked_col_ids`, JSON.stringify(lockedIds));
+    } catch {
+      // ignore
+    }
+  }, [columns, storageKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`${storageKey}_views`, JSON.stringify(views));
     } catch {
       // ignore
     }
@@ -324,7 +546,7 @@ export function useBitable<T extends { id: string }>({
 
   useEffect(() => {
     try {
-      storage.setItem(`${storageKey}_active_view_id`, activeViewId);
+      localStorage.setItem(`${storageKey}_active_view_id`, activeViewId);
     } catch {
       // ignore
     }
@@ -351,6 +573,7 @@ export function useBitable<T extends { id: string }>({
   };
 
   const handleCreateView = (name: string, viewType: BitableViewType = 'grid') => {
+    markHistory(`新建视图 ${name}`);
     const newViewId = `view_${Date.now()}`;
     const iconMap: Record<BitableViewType, string> = {
       grid: 'table_chart',
@@ -367,7 +590,8 @@ export function useBitable<T extends { id: string }>({
       viewType,
       icon: iconMap[viewType] || 'table_chart',
       scope: 'collaborative',
-      isLocked: false
+      isLocked: false,
+      pinned: undefined // 新视图不继承固定卡属性（2026-10-28 修复：复制总表后删除菜单消失）
     };
     setViews((prev) => [...prev, newView]);
     setActiveViewId(newViewId);
@@ -375,12 +599,22 @@ export function useBitable<T extends { id: string }>({
   };
 
   const updateViewConfig = (viewId: string, updates: Partial<BitableViewConfig>) => {
+    markHistory('修改视图配置');
     setViews((prev) =>
-      prev.map((v) => (v.id === viewId ? { ...v, ...updates } : v))
+      prev.map((v, idx) => {
+        if (v.id !== viewId) return v;
+        const isMaster = idx === 0 || v.name === '总表';
+        // 系统总表固定为协作视图，忽略任何改为个人视图的请求
+        if (isMaster && updates.scope === 'personal') {
+          return { ...v, ...updates, scope: 'collaborative' };
+        }
+        return { ...v, ...updates };
+      })
     );
   };
 
   const setViewType = (type: BitableViewType) => {
+    markHistory('修改视图类型');
     const iconMap: Record<BitableViewType, string> = {
       grid: 'table_chart',
       kanban: 'view_kanban',
@@ -397,19 +631,24 @@ export function useBitable<T extends { id: string }>({
   };
 
   const setViewScope = (scope: BitableViewScope) => {
+    // 系统总表固定为协作视图
+    if (isMasterView && scope === 'personal') return;
+    markHistory('切换视图范围');
     updateActiveView((prev) => ({ ...prev, scope }));
   };
 
   const toggleViewLock = () => {
+    markHistory(activeView?.isLocked ? '解锁视图' : '锁定视图');
     updateActiveView((prev) => ({ ...prev, isLocked: !prev.isLocked }));
   };
 
   const handleDeleteView = (viewId: string): boolean => {
     const targetIndex = views.findIndex((v) => v.id === viewId);
-    if (targetIndex === 0) {
-      return false; // 主视图（第一位）不可删除
+    if (targetIndex === 0 || views[targetIndex]?.name === '总表' || views[targetIndex]?.pinned) {
+      return false; // The first tab "总表" and pinned views cannot be deleted
     }
     if (views.length <= 1) return false;
+    markHistory(`删除视图 ${views[targetIndex]?.name || ''}`);
     const remaining = views.filter((v) => v.id !== viewId);
     setViews(remaining);
     if (activeViewId === viewId) {
@@ -420,9 +659,14 @@ export function useBitable<T extends { id: string }>({
 
   const renameView = (viewId: string, newName: string) => {
     const targetIndex = views.findIndex((v) => v.id === viewId);
-    if (targetIndex === 0) {
-      return; // 主视图（第一位）不可改名
+    if (targetIndex === 0 || views[targetIndex]?.name === '总表' || views[targetIndex]?.pinned) {
+      return; // The "总表" and pinned view names cannot be modified
     }
+    // 已锁定视图禁止重命名：锁定保护覆盖「配置 + 名称」，与视图页签/视图配置弹层的入口口径一致
+    if (views[targetIndex]?.isLocked) {
+      return;
+    }
+    markHistory(`视图改名 ${newName}`);
     setViews((prev) =>
       prev.map((v) => (v.id === viewId ? { ...v, name: newName } : v))
     );
@@ -434,21 +678,68 @@ export function useBitable<T extends { id: string }>({
     const newView: BitableViewConfig = {
       ...target,
       id: newId,
-      name: `${target.name} (副本)`
+      name: `${target.name} (副本)`,
+      pinned: undefined // 副本不继承固定卡属性（2026-10-28 修复：复制固定视图后删除菜单消失）
     };
+    markHistory(`复制视图 ${target.name}`);
     setViews((prev) => [...prev, newView]);
     setActiveViewId(newId);
     return newView;
   };
 
   // 5. Column Operations
+  /**
+   * 当前视图生效的隐藏字段集合（视图级显隐，飞书式：一个视图隐藏不影响其他视图）。
+   * 全局 col.visible 仍保留，用于系统级隐藏字段（如「父级记录」）与历史数据兼容。
+   */
+  const hiddenFieldIdSet = useMemo(
+    () => new Set(activeView?.hiddenFieldIds ?? []),
+    [activeView]
+  );
+
+  /** 传给表格 / 工具栏的列：把视图级隐藏字段覆盖成 visible:false，展示层零改动 */
+  const viewColumns = useMemo(
+    () =>
+      hiddenFieldIdSet.size === 0
+        ? columns
+        : columns.map((c) =>
+            hiddenFieldIdSet.has(c.id) ? { ...c, visible: false } : c
+          ),
+    [columns, hiddenFieldIdSet]
+  );
+
+  /**
+   * 切换字段显隐（字段配置弹层的「显示」勾选）。
+   * 语义是**当前视图**粒度：
+   * - 取消勾选 → 把字段加入当前视图 hiddenFieldIds（其他视图不受影响）；
+   * - 勾选 → 从当前视图隐藏清单移除；若该字段同时被全局隐藏（历史数据 / 系统字段），
+   *   则一并恢复全局可见，保证「勾上就能看到」。
+   */
   const toggleColumnVisibility = (columnId: string) => {
-    setColumns((prev) =>
-      prev.map((col) => (col.id === columnId ? { ...col, visible: !col.visible } : col))
-    );
+    const col = columns.find((c) => c.id === columnId);
+    if (!col) return;
+    const effectiveVisible = col.visible && !hiddenFieldIdSet.has(columnId);
+    markHistory(effectiveVisible ? `在当前视图隐藏字段 ${col.label}` : `在当前视图显示字段 ${col.label}`);
+    if (effectiveVisible) {
+      updateActiveView((prev) => ({
+        ...prev,
+        hiddenFieldIds: [...(prev.hiddenFieldIds ?? []), columnId]
+      }));
+    } else {
+      updateActiveView((prev) => ({
+        ...prev,
+        hiddenFieldIds: (prev.hiddenFieldIds ?? []).filter((id) => id !== columnId)
+      }));
+      if (!col.visible) {
+        setColumns((prev) =>
+          prev.map((c) => (c.id === columnId ? { ...c, visible: true } : c))
+        );
+      }
+    }
   };
 
   const moveColumn = (dragIndex: number, hoverIndex: number) => {
+    markHistory('调整字段顺序');
     setColumns((prev) => {
       const next = [...prev];
       const [removed] = next.splice(dragIndex, 1);
@@ -464,6 +755,7 @@ export function useBitable<T extends { id: string }>({
    */
   const moveColumnById = (dragId: string, targetId: string) => {
     if (dragId === targetId) return;
+    markHistory('调整字段顺序');
     setColumns((prev) => {
       const from = prev.findIndex((c) => c.id === dragId);
       const to = prev.findIndex((c) => c.id === targetId);
@@ -476,6 +768,7 @@ export function useBitable<T extends { id: string }>({
   };
 
   const addCustomColumn = (newCol: Omit<BitableColumnConfig<T>, 'visible'>) => {
+    markHistory(`新增字段 ${newCol.label}`);
     setColumns((prev) => [
       ...prev,
       {
@@ -495,13 +788,14 @@ export function useBitable<T extends { id: string }>({
       return false;
     }
 
+    markHistory(`删除字段 ${target.label}`);
     setColumns((prev) => prev.filter((c) => c.id !== columnId));
 
     try {
-      const savedDeleted = storage.getItem(`${storageKey}_deleted_col_ids`);
+      const savedDeleted = localStorage.getItem(`${storageKey}_deleted_col_ids`);
       const deletedSet = new Set<string>(savedDeleted ? JSON.parse(savedDeleted) : []);
       deletedSet.add(columnId);
-      storage.setItem(`${storageKey}_deleted_col_ids`, JSON.stringify(Array.from(deletedSet)));
+      localStorage.setItem(`${storageKey}_deleted_col_ids`, JSON.stringify(Array.from(deletedSet)));
     } catch {
       // ignore
     }
@@ -513,7 +807,8 @@ export function useBitable<T extends { id: string }>({
         filterRules: (v.filterRules || []).filter((r) => r.fieldId !== columnId),
         sortRules: (v.sortRules || []).filter((s) => s.fieldId !== columnId),
         groupRules: (v.groupRules || []).filter((g) => g.fieldId !== columnId),
-        groupByFieldId: v.groupByFieldId === columnId ? null : v.groupByFieldId
+        groupByFieldId: v.groupByFieldId === columnId ? null : v.groupByFieldId,
+        hiddenFieldIds: (v.hiddenFieldIds || []).filter((id) => id !== columnId)
       }))
     );
 
@@ -521,15 +816,17 @@ export function useBitable<T extends { id: string }>({
   };
 
   const toggleColumnLock = (columnId: string) => {
+    const col = columns.find((c) => c.id === columnId);
+    markHistory(col ? (col.isLocked ? `解锁字段 ${col.label}` : `锁定字段 ${col.label}`) : '调整字段锁定');
     setColumns((prev) =>
       prev.map((col) => {
         if (col.id !== columnId) return col;
-        if (col.type === 'action') return col;
+        // action 列（附件/操作按钮）同样允许加锁：加锁只影响能否改名，不影响按钮渲染。
         const nextLocked = !col.isLocked;
         return {
           ...col,
-          isLocked: nextLocked,
-          editable: !nextLocked
+          isLocked: nextLocked
+          // 不写 editable：单元格可编辑性由代码定义，锁定只叠加在 isLocked 上
         };
       })
     );
@@ -540,6 +837,10 @@ export function useBitable<T extends { id: string }>({
     newType: BitableFieldType,
     options?: BitableSelectOption[]
   ) => {
+    // 锁定字段不可改类型：与 setState 内部的守卫同口径，避免留下幽灵操作标签
+    const targetCol = columns.find((c) => c.id === columnId);
+    if (!targetCol || targetCol.isLocked) return;
+    markHistory(`修改字段类型 ${targetCol.label}`);
     setColumns((prev) =>
       prev.map((col) => {
         if (col.id !== columnId) return col;
@@ -551,23 +852,54 @@ export function useBitable<T extends { id: string }>({
           { label: '选项3', value: '选项3', color: 'bg-slate-100 text-slate-700 border-slate-200' }
         ];
 
-        return {
+        // 类型真的变了：必须丢掉原类型专属的自定义 render。
+        // EditableCell 会先判 `column.render` 直接返回，保留它会让展示层永远走旧外观——
+        // 典型症状：文本列改成单选后，单元格还是纯灰字、选项配色完全不生效。
+        const typeChanged = col.type !== newType;
+
+        // 单选 / 多选共用候选项：切过去时若调用方没给选项、列上也没有选项，
+        // 就用现有数据里的去重值自动建选项，让「改成单选/多选」立刻能看到各自的配色。
+        const needsOptions = newType === 'select' || newType === 'multiSelect';
+        const derivedOptions = (() => {
+          if (!needsOptions || (options && options.length > 0)) return [];
+          if (col.options && col.options.length > 0) return [];
+          const seen: string[] = [];
+          data.forEach((row) => {
+            const raw = (row as Record<string, unknown>)[columnId];
+            // 用 toValueList 而不是 String(raw)：多选/人员列的值是数组，
+            // String(['建筑','结构']) 会变成 "建筑,结构" 这种半截字符串。
+            toValueList(raw).forEach((v) => {
+              if (v && !seen.includes(v)) seen.push(v);
+            });
+          });
+          return seen.slice(0, 12).map((v, idx) => ({
+            label: v,
+            value: v,
+            color: SELECT_OPTION_PALETTE[idx % SELECT_OPTION_PALETTE.length]
+          }));
+        })();
+
+        const next: BitableColumnConfig<T> = {
           ...col,
           type: newType,
-          options:
-            newType === 'select'
-              ? (options && options.length > 0
-                  ? options
-                  : col.options && col.options.length > 0
-                  ? col.options
-                  : defaultSelectOptions)
-              : col.options
+          options: needsOptions
+            ? options && options.length > 0
+              ? options
+              : col.options && col.options.length > 0
+              ? col.options
+              : derivedOptions.length > 0
+              ? derivedOptions
+              : defaultSelectOptions
+            : col.options
         };
+        if (typeChanged) delete next.render;
+        return next;
       })
     );
   };
 
   const updateColumnConfig = (columnId: string, updates: Partial<BitableColumnConfig<T>>) => {
+    markHistory('修改字段配置');
     setColumns((prev) =>
       prev.map((col) => (col.id === columnId ? { ...col, ...updates } : col))
     );
@@ -575,15 +907,19 @@ export function useBitable<T extends { id: string }>({
 
   const resetColumns = () => {
     try {
-      storage.removeItem(`${storageKey}_deleted_col_ids`);
-      storage.removeItem(`${storageKey}_columns`);
+      localStorage.removeItem(`${storageKey}_deleted_col_ids`);
+      localStorage.removeItem(`${storageKey}_columns`);
+      localStorage.removeItem(`${storageKey}_locked_col_ids`);
     } catch {
       // ignore
     }
+    markHistory('重置字段配置');
     setColumns(defaultColumns);
   };
 
   const toggleColumnFreeze = (columnId: string) => {
+    const col = columns.find((c) => c.id === columnId);
+    markHistory(col ? (col.isFrozen ? '取消冻结字段' : '冻结字段') : '调整字段冻结');
     setColumns((prev) =>
       prev.map((col) => (col.id === columnId ? { ...col, isFrozen: !col.isFrozen } : col))
     );
@@ -592,11 +928,13 @@ export function useBitable<T extends { id: string }>({
   const renameColumn = (columnId: string, newLabel: string) => {
     const trimmed = newLabel.trim();
     if (!trimmed) return;
+    markHistory(`字段改名 ${trimmed}`);
     setColumns((prev) =>
       prev.map((col) => {
         if (col.id !== columnId) return col;
-        // Strictly prohibit renaming locked or administrator-configured fields
-        if (col.isLocked || (!col.editable && !col.isCustom)) return col;
+        // 显式锁定的字段不可改名；其余字段（含主键、只读单元格的系统字段）均允许改 label。
+        // id 不变，行数据、图号规则、各页映射都按 id 走，改显示名不影响业务。
+        if (col.isLocked) return col;
         return { ...col, label: trimmed };
       })
     );
@@ -604,20 +942,24 @@ export function useBitable<T extends { id: string }>({
 
   // 6. Filter Operations
   const setFilterRules = (rules: BitableFilterRule[]) => {
+    markHistory('修改筛选条件');
     updateActiveView((prev) => ({ ...prev, filterRules: rules }));
   };
 
   const setFilterLogic = (logic: 'AND' | 'OR') => {
+    markHistory('修改筛选逻辑');
     updateActiveView((prev) => ({ ...prev, filterLogic: logic }));
   };
 
   // 7. Sort Operations
   const setSortRules = (rules: BitableSortRule[]) => {
+    markHistory('修改排序规则');
     updateActiveView((prev) => ({ ...prev, sortRules: rules }));
   };
 
   // 8. Group Operations
   const setGroupRules = (rules: BitableGroupRule[]) => {
+    markHistory('修改分组');
     updateActiveView((prev) => ({
       ...prev,
       groupRules: rules,
@@ -626,6 +968,7 @@ export function useBitable<T extends { id: string }>({
   };
 
   const setGroupByFieldId = (fieldId: string | null) => {
+    markHistory(fieldId ? '按字段分组' : '取消分组');
     updateActiveView((prev) => ({
       ...prev,
       groupByFieldId: fieldId,
@@ -635,16 +978,19 @@ export function useBitable<T extends { id: string }>({
 
   // 9. Density Operations
   const setDensity = (density: BitableDensity) => {
+    markHistory('调整行密度');
     updateActiveView((prev) => ({ ...prev, density }));
   };
 
   // 10. Color Rules Operations
   const setColorRules = (colorRules: BitableColorRule[]) => {
+    markHistory('修改颜色规则');
     updateActiveView((prev) => ({ ...prev, colorRules }));
   };
 
   // 11. Row Operations (Inline Editing)
   const updateCell = (rowId: string, fieldId: string, value: any) => {
+    markHistory(`修改单元格 ${fieldId}`);
     setData((prev) =>
       prev.map((item) => {
         if (item.id === rowId) {
@@ -658,7 +1004,30 @@ export function useBitable<T extends { id: string }>({
     );
   };
 
+  /**
+   * 批量写单元格（拖拽填充用）。
+   * 一次 setData 合并所有行，撤销时是**一步**；逐格调 updateCell 会变成 N 步，
+   * 用户要按 N 次 Ctrl+Z 才能退回去，所以填充必须走这里。
+   */
+  const updateCells = (updates: { rowId: string; fieldId: string; value: any }[]) => {
+    if (updates.length === 0) return;
+    markHistory(`填充 ${updates.length} 行`);
+    const patchByRow = new Map<string, Record<string, any>>();
+    updates.forEach(({ rowId, fieldId, value }) => {
+      const patch = patchByRow.get(rowId) || {};
+      patch[fieldId] = value;
+      patchByRow.set(rowId, patch);
+    });
+    setData((prev) =>
+      prev.map((item) => {
+        const patch = patchByRow.get(item.id);
+        return patch ? ({ ...item, ...patch } as T) : item;
+      })
+    );
+  };
+
   const addRow = (initialValues?: Partial<T>) => {
+    markHistory('新增记录');
     const newId = `row_${Date.now()}`;
     const newRow = {
       id: newId,
@@ -669,17 +1038,20 @@ export function useBitable<T extends { id: string }>({
   };
 
   const deleteRow = (rowId: string) => {
+    markHistory('删除记录');
     setData((prev) => prev.filter((item) => item.id !== rowId));
   };
 
   const deleteRows = (rowIds: string[]) => {
+    if (rowIds.length === 0) return;
+    markHistory(rowIds.length > 1 ? `批量删除 ${rowIds.length} 条记录` : '删除记录');
     const idSet = new Set(rowIds);
     setData((prev) => prev.filter((item) => !idSet.has(item.id)));
   };
 
   // —— 11.1 行级结构操作（插入空白行 / 复制行 / 拖拽排序 / 父子记录 / 列宽） ——
 
-  /** 主字段（第一个可见非操作列）：父子记录用它作为父记录的引用键 */
+  /** 主字段（第一个可见非后台字段）：父子记录用它作为父记录的引用键 */
   const primaryFieldId = useMemo(
     () => columns.find((c) => c.visible && c.type !== 'action')?.id,
     [columns]
@@ -703,7 +1075,7 @@ export function useBitable<T extends { id: string }>({
    * 取当前视图可用的父级字段。
    *
    * 父子记录需要一个「记录父级引用」的字段，它 **不能** 是主字段本身
-   * （否则把子记录 A-103 的父级写成 A-101 时，会覆盖掉它自己的主键，层级直接成环）。
+   * （否则把 A-103 的父级写成 A-101 时，会覆盖掉它自己的图号，层级直接成环）。
    * 所以：视图里已配置了非主字段的父级字段就复用，否则自动补一个隐藏的
    * 「父级记录」文本字段并把视图的父子记录开关打开。
    */
@@ -724,7 +1096,7 @@ export function useBitable<T extends { id: string }>({
           sortable: false,
           filterable: true,
           groupable: false,
-          description: '父子记录：填写父记录的主键值（如 A-101），本行即成为其子记录'
+          description: '父子记录：填写父记录的主键值（如图号 A-101），本行即成为其子记录'
         }
       ]);
     }
@@ -763,11 +1135,12 @@ export function useBitable<T extends { id: string }>({
     position: 'above' | 'below' | 'child' = 'below',
     values?: Partial<T>
   ): T => {
+    markHistory(position === 'child' ? '插入子记录' : '插入记录');
     const newRow = makeBlankRow(values);
     const anchor = anchorRowId ? data.find((r) => r.id === anchorRowId) : undefined;
 
     /**
-     * 主字段若是锁定列（如系统编号），表格里无法手动录入，
+     * 主字段若是管理员配置的锁定列（如「图纸编号」），表格里无法手动录入，
      * 空白行会变成无法识别的记录。这里补一个占位编号，其余字段保持空白。
      */
     const primaryCol = columns.find((c) => c.id === primaryFieldId);
@@ -810,6 +1183,7 @@ export function useBitable<T extends { id: string }>({
   const duplicateRow = (rowId: string): T | null => {
     const source = data.find((r) => r.id === rowId);
     if (!source) return null;
+    markHistory('复制记录');
     const copy = {
       ...(source as any),
       id: `row_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
@@ -827,6 +1201,7 @@ export function useBitable<T extends { id: string }>({
   const detachRow = (rowId: string): boolean => {
     const fieldId = parentFieldId;
     if (!fieldId) return false;
+    markHistory('移出父级层级');
     setData((prev) =>
       prev.map((item) => (item.id === rowId ? ({ ...item, [fieldId]: '' } as T) : item))
     );
@@ -847,6 +1222,8 @@ export function useBitable<T extends { id: string }>({
       return { ok: false, message: '不能拖到记录自身' };
     }
 
+    markHistory(position === 'child' ? '建立父子记录' : '调整行顺序');
+
     // 父级字段：复用视图已配置的字段；拖拽成子记录时若未配置则自动补一个
     const hierarchyFieldId =
       position === 'child'
@@ -855,7 +1232,7 @@ export function useBitable<T extends { id: string }>({
         ? parentFieldId
         : null;
 
-    // 父子引用可能存的是行 id，也可能存的是主字段值，先建双向索引
+    // 父子引用可能存的是行 id，也可能存的是主字段值（图号 / 编号），先建双向索引
     const byValue = new Map<string, T>();
     data.forEach((row) => {
       byValue.set(row.id, row);
@@ -914,6 +1291,7 @@ export function useBitable<T extends { id: string }>({
   /** 拖动表头边线调整列宽（同时写 width 与 minWidth，避免被旧的 minWidth 卡住） */
   const resizeColumn = (columnId: string, width: number) => {
     const px = Math.max(80, Math.round(width));
+    markHistory('调整列宽');
     setColumns((prev) =>
       prev.map((col) =>
         col.id === columnId ? { ...col, width: `${px}px`, minWidth: `${px}px` } : col
@@ -1148,7 +1526,9 @@ export function useBitable<T extends { id: string }>({
     processedData,
     groupedData,
     columns,
-    visibleColumns: columns.filter((c) => c.visible),
+    /** 当前视图生效的列（视图级隐藏字段已覆盖为 visible:false），表格 / 工具栏用这份 */
+    viewColumns,
+    visibleColumns: viewColumns.filter((c) => c.visible),
     views,
     activeView,
     activeViewId,
@@ -1187,6 +1567,13 @@ export function useBitable<T extends { id: string }>({
     setDensity,
     setColorRules,
     updateCell,
+    updateCells,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    undoLabel,
+    redoLabel,
     addRow,
     deleteRow,
     deleteRows,

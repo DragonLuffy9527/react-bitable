@@ -31,13 +31,16 @@ all work out of the box — data and configuration persist to `localStorage`.
 | Area | Details |
 | --- | --- |
 | Views | grid / kanban / gallery / gantt / calendar / form — all sharing one view config |
-| Fields | 7 field types, add / remove / rename / reorder / resize / lock / freeze |
+| Fields | 7 field types, add / remove / rename / reorder / resize / lock / freeze, per-view visibility |
 | Filter & sort | AND / OR, 7 operators, multi-field sort |
 | Grouping | nested groups with per-group and global collapse |
 | Coloring | cell or row rules, palette + preset swatches |
 | Editing | click-to-edit, Enter saves, Esc cancels, Tab moves |
 | Hierarchy | drag the row handle to nest, expand / collapse parents |
 | View management | create / rename / duplicate / delete / reset, collaborative vs personal, lockable |
+| Undo / redo | Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y; a batch write counts as one step, selection included |
+| Fill handle | drag the cell handle to fill down — numbers increment, dates advance, trailing numbers bump |
+| Batch write | `updateCells` writes many cells in one `setData`, producing a single undo step |
 | Persistence | rows, columns, views, active view and schema version all persisted |
 | SSR safe | falls back to in-memory storage when `localStorage` is unavailable |
 
@@ -97,9 +100,9 @@ nodes for your own icon component.
 ## Limitations
 
 - Client-side only; multi-user collaboration needs your own backend.
-- Column freezing (`isFrozen`) is persisted but not yet rendered.
-- View-level column visibility (`visibleColumnIds` / `columnOrder`) is persisted but not consumed.
+- No virtual scrolling — tens of thousands of rows will need windowing on your side.
 - No unit tests yet — regression is manual via the playground.
+- Icons depend on Google Fonts; self-host the font for offline use.
 
 ## License
 

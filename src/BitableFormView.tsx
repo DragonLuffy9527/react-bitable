@@ -10,6 +10,7 @@ interface BitableFormViewProps<T extends { id: string }> {
 const inputTypeOf = (col: BitableColumnConfig<any>): string => {
   if (col.type === 'number') return 'number';
   if (col.type === 'date') return 'date';
+  if (col.type === 'url') return 'url';
   return 'text';
 };
 
@@ -102,7 +103,40 @@ export const BitableFormView = <T extends { id: string }>({
                   {col.label}
                   {required && <span className="text-rose-500 ml-0.5">*</span>}
                 </div>
-                {col.options && col.options.length > 0 ? (
+                {col.type === 'multiSelect' && col.options && col.options.length > 0 ? (
+                  // 多选：复选框组，值仍以逗号串存在 values 里（表单不落库，无需数组类型）
+                  <div className="flex flex-wrap gap-1.5">
+                    {col.options.map((o) => {
+                      const picked = String(values[col.id] ?? '')
+                        .split(',')
+                        .filter(Boolean);
+                      const checked = picked.includes(o.value);
+                      return (
+                        <label
+                          key={o.value}
+                          className={`inline-flex items-center gap-1 h-7 px-2 rounded-md border text-[11.5px] cursor-pointer transition-colors ${
+                            checked
+                              ? 'bg-blue-50 border-[#005BAC] text-[#005BAC] font-medium'
+                              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              const next = checked
+                                ? picked.filter((v) => v !== o.value)
+                                : [...picked, o.value];
+                              setValues((p) => ({ ...p, [col.id]: next.join(',') }));
+                            }}
+                            className="w-3 h-3 rounded text-[#005BAC] cursor-pointer"
+                          />
+                          {o.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : col.options && col.options.length > 0 ? (
                   <select
                     value={values[col.id] ?? ''}
                     onChange={(e) => setValues((p) => ({ ...p, [col.id]: e.target.value }))}

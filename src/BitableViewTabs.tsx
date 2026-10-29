@@ -10,6 +10,8 @@ interface BitableViewTabsProps {
   onDeleteView: (viewId: string) => void;
   onDuplicateView?: (viewId: string) => void;
   onUpdateViewConfig?: (viewId: string, updates: Partial<BitableViewConfig>) => void;
+  /** 重命名视图（空名/重名不提交，由调用方决定是否提示） */
+  onRenameView?: (viewId: string, newName: string) => void;
 }
 
 export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
@@ -19,13 +21,19 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
   onCreateView,
   onDeleteView,
   onDuplicateView,
-  onUpdateViewConfig
+  onUpdateViewConfig,
+  onRenameView
 }) => {
   const [showAddMenu, setShowAddMenu] = useState(false);
   // 下拉菜单用 fixed 定位（标签栏是 overflow-x-auto，绝对定位会被裁剪）
   const [addMenuPos, setAddMenuPos] = useState<{ left: number; top: number } | null>(null);
   const [tabMenuPos, setTabMenuPos] = useState<{ left: number; top: number } | null>(null);
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  // 标签内联重命名
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  // 用 ref 记录正在编辑的 id：避免 Enter 提交后 input 卸载再触发 blur 造成二次提交/覆盖
+  const renamingRef = useRef<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const closeTimerRef = useRef<number | null>(null);
 
@@ -71,10 +79,10 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
 
   const viewTypeOptions: { type: BitableViewType; label: string; icon: string; desc: string }[] = [
     { type: 'grid', label: '表格视图', icon: 'table_chart', desc: '传统二维网格，适宜海量数据细排' },
-    { type: 'kanban', label: '看板视图', icon: 'view_kanban', desc: '按状态字段分泳道的卡片流转' },
+    { type: 'kanban', label: '看板视图', icon: 'view_kanban', desc: '按状态/专业泳道卡片流转' },
     { type: 'calendar', label: '日历视图', icon: 'calendar_month', desc: '按日期字段在月历上排布记录' },
-    { type: 'gantt', label: '甘特视图', icon: 'waterfall_chart', desc: '按阶段推进的里程碑横道图' },
-    { type: 'gallery', label: '画册视图', icon: 'image', desc: '封面图 + 字段摘要的卡片画廊' },
+    { type: 'gantt', label: '甘特视图', icon: 'waterfall_chart', desc: '出图进度里程碑横道图' },
+    { type: 'gallery', label: '画册视图', icon: 'image', desc: '图纸大图与CAD矢量卡片画廊' },
     { type: 'form', label: '表单视图', icon: 'description', desc: '以表单形式逐项录入与提交记录' }
   ];
 
@@ -83,6 +91,36 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
     setAddMenuPos(null);
     const count = views.filter((v) => v.viewType === type).length + 1;
     onCreateView(`${label} ${count}`, type);
+  };
+
+  // ---- 视图重命名（菜单项 / 双击标签） ----
+  const startRename = (v: BitableViewConfig, isMaster: boolean) => {
+    // 「总表」为系统基础视图，名称不可改（与 useBitable.renameView 保持一致）
+    if (isMaster) return;
+    // 已锁定视图禁止重命名：锁定保护覆盖「配置+名称」，需先在菜单中解锁
+    if (v.isLocked) return;
+    renamingRef.current = v.id;
+    setRenameDraft(v.name);
+    setRenamingId(v.id);
+    setActiveMenuId(null);
+    setTabMenuPos(null);
+    setShowAddMenu(false);
+    setAddMenuPos(null);
+  };
+
+  const cancelRename = () => {
+    renamingRef.current = null;
+    setRenamingId(null);
+  };
+
+  const commitRename = (viewId: string) => {
+    if (renamingRef.current !== viewId) return;
+    renamingRef.current = null;
+    setRenamingId(null);
+    const next = renameDraft.trim();
+    const current = views.find((v) => v.id === viewId);
+    if (!current || !next || next === current.name) return;
+    onRenameView?.(viewId, next);
   };
 
   return (
@@ -99,7 +137,9 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
         {/* Tab List */}
         {views.map((v, index) => {
           const isActive = v.id === activeViewId;
-          const isMaster = index === 0;
+          const isMaster = index === 0 || v.name === '总表';
+          const isPinned = !!v.pinned; // 固定标签卡：不可删除/重命名
+          const isFixed = isMaster || isPinned;
           const isLocked = !!v.isLocked;
           const isPersonal = v.scope === 'personal';
           const isMenuOpen = activeMenuId === v.id;
@@ -128,7 +168,13 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
                   ? 'bg-white border-slate-300 text-[#005BAC] font-semibold shadow-xs -mb-px z-10'
                   : 'bg-slate-50 border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
-              title={isMaster ? '主视图（不可删除）' : `业务视图: ${v.name}`}
+              title={
+                isMaster
+                  ? '总表 (系统基础视图，不可删除)'
+                  : isPinned
+                  ? `${v.name} (固定视图，不可删除)`
+                  : `业务视图: ${v.name}`
+              }
             >
               {/* View Icon */}
               <span
@@ -139,13 +185,56 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
                 {v.icon || defaultIcon}
               </span>
 
-              {/* View Name */}
-              <span className="truncate max-w-[130px]">{v.name}</span>
+              {/* View Name（双击进入内联重命名） */}
+              {renamingId === v.id ? (
+                <input
+                  autoFocus
+                  value={renameDraft}
+                  maxLength={30}
+                  onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onChange={(e) => setRenameDraft(e.target.value)}
+                  onBlur={() => commitRename(v.id)}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      commitRename(v.id);
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      cancelRename();
+                    }
+                  }}
+                  className="h-[22px] w-[112px] shrink-0 select-text rounded border border-[#005BAC] bg-white px-1 text-[12.5px] font-medium text-slate-800 outline-none ring-2 ring-[#005BAC]/15"
+                  title="回车确认 / Esc 取消"
+                />
+              ) : (
+                <span
+                  className="truncate max-w-[130px]"
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    startRename(v, isMaster);
+                  }}
+                  title={
+                    isMaster
+                      ? '总表（系统基础视图，不可重命名）'
+                      : isLocked
+                      ? '视图已锁定，名称不可修改（可在「⋯」菜单解锁后重命名）'
+                      : '双击可重命名'
+                  }
+                >
+                  {v.name}
+                </span>
+              )}
 
-              {/* Status Badges: Lock & Personal */}
+              {/* Status Badges: Lock & Personal（与「⋯」一致，悬停/菜单打开时才显现，避免页签挂满橙色小锁） */}
               {isLocked && (
                 <span
-                  className="material-symbols-outlined text-[12px] text-amber-600 -ml-0.5 shrink-0"
+                  className={`material-symbols-outlined text-[10px] text-amber-600 -ml-0.5 shrink-0 transition-opacity duration-150 ${
+                    isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                  }`}
                   title="此视图已锁定配置"
                 >
                   lock
@@ -195,6 +284,33 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
                   style={{ position: 'fixed', left: tabMenuPos.left, top: tabMenuPos.top, zIndex: 9999 }}
                   className="w-44 bg-white border border-slate-200 rounded-lg shadow-xl py-1 text-slate-700 text-[11.5px] animate-in fade-in zoom-in-95 duration-100"
                 >
+                  {/* Rename View（总表 / 已锁定视图均不可重命名） */}
+                  <button
+                    type="button"
+                    disabled={isMaster || isLocked}
+                    onClick={() => {
+                      if (isMaster || isLocked) return;
+                      startRename(v, isMaster);
+                    }}
+                    className={`w-full px-3 py-1.5 flex items-center gap-2 text-left ${
+                      isMaster || isLocked
+                        ? 'text-slate-300 cursor-not-allowed'
+                        : 'hover:bg-slate-50 cursor-pointer'
+                    }`}
+                    title={
+                      isMaster
+                        ? '「总表」为系统基础视图，名称不可修改'
+                        : isLocked
+                        ? '视图已锁定，名称不可修改（请先解锁视图配置）'
+                        : '重命名视图'
+                    }
+                  >
+                    <span className={`material-symbols-outlined text-[15px] ${isMaster || isLocked ? 'text-slate-300' : 'text-slate-400'}`}>
+                      edit
+                    </span>
+                    <span>重命名视图</span>
+                  </button>
+
                   {/* Duplicate View */}
                   <button
                     type="button"
@@ -223,25 +339,32 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
                     <span>{isLocked ? '解锁视图配置' : '锁定视图配置'}</span>
                   </button>
 
-                  {/* Toggle Scope: Personal / Collaborative */}
+                  {/* Toggle Scope: Personal / Collaborative —— 总表固定协作，不可切换 */}
                   <button
                     type="button"
+                    disabled={isMaster}
+                    title={isMaster ? '「总表」为系统基础总表，固定为协作视图，不可改为个人视图' : undefined}
                     onClick={() => {
+                      if (isMaster) return;
                       setActiveMenuId(null);
                       onUpdateViewConfig?.(v.id, {
                         scope: isPersonal ? 'collaborative' : 'personal'
                       });
                     }}
-                    className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-50 text-left cursor-pointer"
+                    className={`w-full px-3 py-1.5 flex items-center gap-2 text-left ${
+                      isMaster
+                        ? 'text-slate-400 cursor-not-allowed'
+                        : 'hover:bg-slate-50 cursor-pointer'
+                    }`}
                   >
-                    <span className="material-symbols-outlined text-[15px] text-slate-400">
-                      {isPersonal ? 'public' : 'person'}
+                    <span className={`material-symbols-outlined text-[15px] ${isMaster ? 'text-slate-300' : 'text-slate-400'}`}>
+                      {isMaster ? 'lock' : isPersonal ? 'public' : 'person'}
                     </span>
-                    <span>{isPersonal ? '转为协作视图' : '转为个人视图'}</span>
+                    <span>{isMaster ? '总表固定协作视图' : isPersonal ? '转为协作视图' : '转为个人视图'}</span>
                   </button>
 
-                  {/* Delete View (disabled for master view) */}
-                  {!isMaster && views.length > 1 && (
+                  {/* Delete View (disabled for master / pinned views) */}
+                  {!isFixed && views.length > 1 && (
                     <div className="pt-1 mt-1 border-t border-slate-100">
                       <button
                         type="button"

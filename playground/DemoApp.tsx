@@ -24,6 +24,7 @@ export function DemoApp() {
     data,
     groupedData,
     columns,
+    viewColumns,
     views,
     activeView,
     activeViewId,
@@ -198,7 +199,7 @@ export function DemoApp() {
 
           <div className="mt-2.5">
             <BitableToolbar
-              columns={columns}
+              columns={viewColumns}
               searchQuery={searchQuery}
               onSearchChange={setSearchQuery}
               searchPlaceholder="搜索编号 / 标题 / 负责人…"
@@ -307,7 +308,7 @@ export function DemoApp() {
 
           <div className="mt-2.5">
             <BitableTable
-              columns={columns}
+              columns={viewColumns}
               groupedData={groupedData}
               viewType={activeView.viewType}
               viewConfig={activeView}

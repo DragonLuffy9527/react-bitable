@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useLayoutEffect, useMemo } from 'react';
 import {
   BitableColumnConfig,
   BitableColorRule,
@@ -8,6 +8,12 @@ import {
   BitableGroupSection
 } from './types';
 import { EditableCell } from './EditableCell';
+import {
+  buildFillPlan,
+  incrementValue,
+  isFillableFieldType,
+  BitableFillUpdate
+} from './fillSeries';
 import { BitableKanbanView } from './BitableKanbanView';
 import { BitableGalleryView } from './BitableGalleryView';
 import { BitableGanttView } from './BitableGanttView';
@@ -33,11 +39,23 @@ interface BitableTableProps<T extends { id: string }> {
   checkedIds: Record<string, boolean>;
   onToggleCheck: (id: string, e: React.MouseEvent) => void;
   onToggleSelectAll: (checked: boolean) => void;
+  /**
+   * Excel 式行选择（Shift+点击范围选择）时回传目标行集合：
+   * 页面应把勾选集整体替换为这批行（作用对象与复选框勾选一致）。
+   * 未提供时 Shift+点击退化为普通单行点击。
+   */
+  onSelectRows?: (rowIds: string[]) => void;
   density: BitableDensity;
   colorRules: BitableColorRule[];
   onUpdateCell: (rowId: string, fieldId: string, value: any) => void;
   onDeleteRow?: (rowId: string) => void;
   onToggleColumnLock?: (columnId: string) => void;
+  /**
+   * 列锁定保护判定（wiki/13 §13.18 固定字段）：返回 true 的已锁定列为
+   * 「后端固定字段」，锁图标显示红色且不可解锁（点击由页面的
+   * onToggleColumnLock 弹 Toast 拒绝）。未提供时所有锁定列按普通锁定（黄色）展示。
+   */
+  isLockProtectedColumn?: (columnId: string) => boolean;
   onRenameColumn?: (columnId: string, newLabel: string) => void;
   /** 表头左右拖动调整列顺序：传入即启用拖拽 */
   onReorderColumns?: (dragColumnId: string, targetColumnId: string) => void;
@@ -61,6 +79,16 @@ interface BitableTableProps<T extends { id: string }> {
   viewConfig?: BitableViewConfig;
   /** 画册视图封面点「预览附件」时回传该行，由页面接到 AttachmentViewerModal */
   onOpenAttachment?: (row: T) => void;
+  /**
+   * 拖拽填充（单元格右下角手柄下拉，Excel 式递增/复制）的批量写入回调。
+   * 未提供时退化为逐格 onUpdateCell（会触发 N 次保存反馈，建议页面都接上）。
+   */
+  onFillCells?: (updates: BitableFillUpdate[]) => void;
+  /**
+   * 填充模式：撑满父容器高度（父级需为确定高度的 flex 列，本组件 h-full 内部滚动）。
+   * 默认 false 时沿用旧版 max-h-[calc(100vh-215px)] 视口截断，四个台账页应统一传 true 以对齐底边。
+   */
+  fillHeight?: boolean;
 }
 
 export const BitableTable = <T extends { id: string }>({
@@ -71,11 +99,13 @@ export const BitableTable = <T extends { id: string }>({
   checkedIds,
   onToggleCheck,
   onToggleSelectAll,
+  onSelectRows,
   density,
   colorRules,
   onUpdateCell,
   onDeleteRow,
   onToggleColumnLock,
+  isLockProtectedColumn,
   onRenameColumn,
   onReorderColumns,
   onResizeColumn,
@@ -89,11 +119,15 @@ export const BitableTable = <T extends { id: string }>({
   onToggleGroupCollapse,
   viewType = 'grid',
   viewConfig,
-  onOpenAttachment
+  onOpenAttachment,
+  onFillCells,
+  fillHeight = false
 }: BitableTableProps<T>) => {
   const visibleColumns = columns.filter((c) => c.visible);
   // 父子记录的行折叠状态（置于条件早返回之前，保证 hooks 顺序稳定）
   const [collapsedRows, setCollapsedRows] = useState<Record<string, boolean>>({});
+  // Excel 式行选择锚点（最近一次普通/Ctrl/勾选点击的行），置于早返回之前保证 hooks 顺序稳定
+  const anchorRowIdRef = useRef<string | null>(null);
 
   // Column renaming inline state
   const [editingColId, setEditingColId] = useState<string | null>(null);
@@ -125,7 +159,8 @@ export const BitableTable = <T extends { id: string }>({
     const handleMove = (e: MouseEvent) => {
       const start = resizeRef.current;
       if (!start) return;
-      const width = Math.max(80, Math.round(start.startWidth + (e.clientX - start.startX)));
+      // 最小 52px：日期/张数等短内容列可以压得更扁，配合 52px 的 minWidth 兜底
+      const width = Math.max(52, Math.round(start.startWidth + (e.clientX - start.startX)));
       resizeWidthRef.current = width;
       setResizing({ id: start.id, width });
     };
@@ -153,7 +188,231 @@ export const BitableTable = <T extends { id: string }>({
   const effectiveWidth = (col: BitableColumnConfig<T>) =>
     resizing && resizing.id === col.id ? `${resizing.width}px` : col.width;
   const effectiveMinWidth = (col: BitableColumnConfig<T>) =>
-    resizing && resizing.id === col.id ? `${resizing.width}px` : col.minWidth || '100px';
+    resizing && resizing.id === col.id ? `${resizing.width}px` : col.minWidth || '52px';
+
+  // —— 单元格拖拽填充（右下角手柄下拉：递增 / 复制，对齐 Excel） ——
+  const [fillDrag, setFillDrag] = useState<{
+    rowIds: string[];
+    label: string;
+    chip: { x: number; y: number };
+  } | null>(null);
+  const [filling, setFilling] = useState(false);
+  const fillTargetSet = useMemo(() => new Set(fillDrag?.rowIds || []), [fillDrag]);
+  const fillStateRef = useRef<{
+    fieldId: string;
+    type: BitableColumnConfig<T>['type'];
+    value: any;
+    rows: { id: string; top: number; bottom: number }[];
+    sourceIndex: number;
+    lastIndex: number;
+    copyOnly: boolean;
+    anchor: { left: number };
+  } | null>(null);
+  const fillCommitRef = useRef(onFillCells);
+  fillCommitRef.current = onFillCells;
+  const fillFallbackRef = useRef(onUpdateCell);
+  fillFallbackRef.current = onUpdateCell;
+
+  /**
+   * 可填充列：除「后台固定字段」（附件 / 操作等 action 列）与被锁定的列外全部开放。
+   * 只读列（图纸编号 / 名称 / 生效版本等）也允许填充——写入走 updateCell，渲染层会正常反映。
+   */
+  const canFillColumn = (col: BitableColumnConfig<T>) =>
+    col.type !== 'action' && !col.isLocked && isFillableFieldType(col.type);
+
+  /** 按下手柄：记录源行、当前可见行序（含分组顺序，已渲染的行才算） */
+  const beginFill = (e: React.MouseEvent, row: T, col: BitableColumnConfig<T>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const handle = e.currentTarget as HTMLElement;
+    const tableEl = handle.closest('table');
+    if (!tableEl) return;
+    const rowNodes = Array.from(
+      tableEl.querySelectorAll('tbody tr[data-row-id]')
+    ) as HTMLElement[];
+    const rows = rowNodes.map((node) => {
+      const rect = node.getBoundingClientRect();
+      return { id: node.dataset.rowId || '', top: rect.top, bottom: rect.bottom };
+    });
+    const sourceIndex = rows.findIndex((r) => r.id === row.id);
+    if (sourceIndex < 0) return;
+    const cellRect =
+      (handle.closest('td') as HTMLElement | null)?.getBoundingClientRect() ||
+      handle.getBoundingClientRect();
+    fillStateRef.current = {
+      fieldId: col.id,
+      type: col.type,
+      value: (row as any)[col.id],
+      rows,
+      sourceIndex,
+      lastIndex: sourceIndex,
+      copyOnly: e.shiftKey,
+      anchor: { left: cellRect.left }
+    };
+    setFillDrag(null);
+    setFilling(true);
+  };
+
+  useEffect(() => {
+    if (!filling) return;
+
+    // 只在「命中的目标行」变化时才 setState，避免每移动一个像素就重渲染整张表
+    const handleMove = (ev: MouseEvent) => {
+      const st = fillStateRef.current;
+      if (!st || st.rows.length === 0) return;
+      let hoverIndex = st.lastIndex;
+      for (let i = 0; i < st.rows.length; i += 1) {
+        if (ev.clientY >= st.rows[i].top && ev.clientY <= st.rows[i].bottom) {
+          hoverIndex = i;
+          break;
+        }
+      }
+      if (ev.clientY > st.rows[st.rows.length - 1].bottom) hoverIndex = st.rows.length - 1;
+      if (ev.clientY < st.rows[0].top) hoverIndex = 0;
+
+      const copyOnly = ev.shiftKey;
+      if (hoverIndex === st.lastIndex && copyOnly === st.copyOnly) return;
+      st.lastIndex = hoverIndex;
+      st.copyOnly = copyOnly;
+
+      if (hoverIndex === st.sourceIndex) {
+        setFillDrag(null);
+        return;
+      }
+
+      const downward = hoverIndex > st.sourceIndex;
+      const rowIds = downward
+        ? st.rows.slice(st.sourceIndex + 1, hoverIndex + 1).map((r) => r.id)
+        : st.rows
+            .slice(hoverIndex, st.sourceIndex)
+            .map((r) => r.id)
+            .reverse();
+      const direction = downward ? 1 : -1;
+      const previewValue = incrementValue(
+        st.type,
+        st.value,
+        copyOnly ? 0 : direction * rowIds.length
+      );
+      const previewText =
+        previewValue === undefined || previewValue === null || String(previewValue).trim() === ''
+          ? '空'
+          : Array.isArray(previewValue)
+          ? previewValue.join('、') || '空'
+          : String(previewValue);
+
+      setFillDrag({
+        rowIds,
+        label: copyOnly
+          ? `复制填充 ${rowIds.length} 行`
+          : `递增填充 ${rowIds.length} 行 · 末行 ${previewText}`,
+        chip: {
+          x: Math.min(Math.max(8, st.anchor.left), Math.max(8, window.innerWidth - 240)),
+          y: Math.min(st.rows[hoverIndex].bottom + 6, window.innerHeight - 32)
+        }
+      });
+    };
+
+    const handleUp = () => {
+      const st = fillStateRef.current;
+      fillStateRef.current = null;
+      setFilling(false);
+      setFillDrag(null);
+      if (!st || st.lastIndex === st.sourceIndex) return;
+
+      const downward = st.lastIndex > st.sourceIndex;
+      const rowIds = downward
+        ? st.rows.slice(st.sourceIndex + 1, st.lastIndex + 1).map((r) => r.id)
+        : st.rows
+            .slice(st.lastIndex, st.sourceIndex)
+            .map((r) => r.id)
+            .reverse();
+      if (rowIds.length === 0) return;
+
+      const updates = buildFillPlan({
+        fieldId: st.fieldId,
+        type: st.type,
+        sourceValue: st.value,
+        targetRowIds: rowIds,
+        copyOnly: st.copyOnly,
+        direction: downward ? 1 : -1
+      });
+      if (fillCommitRef.current) {
+        fillCommitRef.current(updates);
+      } else {
+        updates.forEach((u) => fillFallbackRef.current(u.rowId, u.fieldId, u.value));
+      }
+    };
+
+    document.body.style.cursor = 'crosshair';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [filling]);
+
+  /**
+   * 冻结列（`col.isFrozen`）：左侧吸附定位。
+   * 勾选列 w-9(36px) + 行号列 w-10(40px) 常驻左侧共 76px，冻结列的 left 从该值起逐列累加。
+   *
+   * ⚠️ 偏移必须按「实际渲染宽度」累加：表格是 table-layout:auto + width:100%，
+   * 浏览器会把列宽重新分配到与配置宽度不同的实际值；若按配置宽度估算，冻结单元格
+   * 之间会留出缝隙，横向滚动时右侧内容从缝隙中透出（2026-10-28 修复）。
+   * 首帧先用配置宽度估算，layout effect 测量 thead 实际列宽后切换为实测值，
+   * 并用 ResizeObserver 跟随容器 / 列宽变化重测。
+   */
+  const LEAD_COL_WIDTH = 76;
+  const parseWidthPx = (value?: string | number): number => {
+    if (typeof value === 'number') return value;
+    const matched = /^\s*([\d.]+)px\s*$/.exec(String(value ?? ''));
+    return matched ? parseFloat(matched[1]) : 140;
+  };
+  const estimatedFrozenLeftMap: Record<string, number> = {};
+  {
+    let cursor = LEAD_COL_WIDTH;
+    visibleColumns.forEach((col) => {
+      if (!col.isFrozen) return;
+      estimatedFrozenLeftMap[col.id] = cursor;
+      cursor += parseWidthPx(effectiveWidth(col));
+    });
+  }
+  const [measuredFrozenLeftMap, setMeasuredFrozenLeftMap] = useState<Record<
+    string,
+    number
+  > | null>(null);
+  const frozenLeftMap = measuredFrozenLeftMap ?? estimatedFrozenLeftMap;
+  const tableRef = useRef<HTMLTableElement>(null);
+
+  useLayoutEffect(() => {
+    const table = tableRef.current;
+    if (!table) return;
+    const measure = () => {
+      const map: Record<string, number> = {};
+      let cursor = LEAD_COL_WIDTH;
+      for (const col of visibleColumns) {
+        if (!col.isFrozen) continue;
+        const th = table.querySelector<HTMLTableCellElement>(
+          `thead tr:first-child th[data-col-id="${CSS.escape(col.id)}"]`
+        );
+        map[col.id] = cursor;
+        cursor += th ? th.offsetWidth : parseWidthPx(effectiveWidth(col));
+      }
+      setMeasuredFrozenLeftMap((prev) =>
+        prev && JSON.stringify(prev) === JSON.stringify(map) ? prev : map
+      );
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(table);
+    return () => ro.disconnect();
+    // visibleColumns 引用每轮渲染都可能是新数组，这里刻意每次渲染重测；
+    // setState 有相等性守卫，不会形成死循环。
+  });
+  const lastFrozenId = [...visibleColumns].reverse().find((col) => col.isFrozen)?.id;
 
   // —— 行拖拽（排序 / 建立父子记录） ——
   const dragRowIdRef = useRef<string | null>(null);
@@ -249,9 +508,10 @@ export const BitableTable = <T extends { id: string }>({
   );
 
   const handleStartRename = (col: BitableColumnConfig<T>) => {
-    if (col.type === 'action' || !onRenameColumn) return;
-    // Locked or non-editable fields cannot have their names changed
-    if (col.isLocked || (!col.editable && !col.isCustom)) return;
+    if (!onRenameColumn) return;
+    // 改名只看显式锁定：editable:false 只代表单元格只读（主键、图名等），仍允许改字段名。
+    // 与 useBitable.renameColumn、字段配置弹层保持同一口径。
+    if (col.isLocked) return;
     setEditingColId(col.id);
     setEditingColLabel(col.label);
   };
@@ -466,7 +726,7 @@ export const BitableTable = <T extends { id: string }>({
 
   // —— 父子记录（视图配置开启后生效）：按「父级字段」的值匹配父记录主键建立层级 ——
   const pcEnabled = !!(viewConfig?.parentChildEnabled && viewConfig?.parentFieldId);
-  const primaryFieldId = visibleColumns[0]?.id; // 主键列 = 第一个可见字段
+  const primaryFieldId = visibleColumns[0]?.id; // 主键列（通常为图号/编号/文件编号）
 
   const buildHierarchy = (items: T[]): { row: T; depth: number; hasChildren: boolean }[] => {
     if (!pcEnabled) return items.map((row) => ({ row, depth: 0, hasChildren: false }));
@@ -513,14 +773,66 @@ export const BitableTable = <T extends { id: string }>({
     return out;
   };
 
+  // —— Excel 式行选择：Ctrl+点击 = 切换该行勾选；Shift+点击 = 锚点行到当前行的范围勾选 ——
+  // 范围作用于复选框勾选集（onSelectRows），锚点在 handleRowClick/handleCheckboxClick 中维护。
+
+  // 当前可见行的渲染顺序（跳过被分组折叠/父子折叠隐藏的行），Shift 范围按此顺序取区间
+  const visibleRowIdList: string[] = [];
+  groupedData.forEach((g) => {
+    if (!isSectionVisible(g)) return;
+    if (collapsedGroups[g.groupKey]) return;
+    buildHierarchy(g.items).forEach((h) => visibleRowIdList.push(h.row.id));
+  });
+
+  /** Shift+点击：选中锚点行到当前行的可见区间。成功返回 true（已处理），否则退化为普通点击 */
+  const shiftRangeSelect = (row: T, e: React.MouseEvent): boolean => {
+    if (!e.shiftKey) return false;
+    const anchorId = anchorRowIdRef.current;
+    const targetIdx = visibleRowIdList.indexOf(row.id);
+    const anchorIdx = anchorId ? visibleRowIdList.indexOf(anchorId) : -1;
+    if (targetIdx < 0 || anchorIdx < 0 || !onSelectRows) return false;
+    e.preventDefault();
+    const [from, to] = anchorIdx <= targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
+    onSelectRows(visibleRowIdList.slice(from, to + 1));
+    return true;
+  };
+
+  /** 行体点击：Shift=范围勾选；Ctrl/Cmd=切换该行勾选；普通=单行高亮（原有行为） */
+  const handleRowClick = (row: T, e: React.MouseEvent) => {
+    if (shiftRangeSelect(row, e)) {
+      anchorRowIdRef.current = row.id;
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+      onToggleCheck(row.id, e);
+    } else {
+      onSelectRow?.(row);
+    }
+    anchorRowIdRef.current = row.id;
+  };
+
+  /** 复选框点击：Shift=范围勾选；其余为原有单个切换 */
+  const handleCheckboxClick = (row: T, e: React.MouseEvent) => {
+    if (!shiftRangeSelect(row, e)) {
+      onToggleCheck(row.id, e);
+    }
+    anchorRowIdRef.current = row.id;
+  };
+
   return (
-    <div className="w-full overflow-x-auto bg-white border border-slate-200 rounded-lg shadow-2xs select-none">
-      <table className="w-full text-left border-collapse min-w-full">
-        {/* Table Header */}
-        <thead className="bg-slate-100 text-slate-700 text-[11.5px] font-semibold border-b border-slate-300 uppercase tracking-wider sticky top-0 z-20">
+    <div
+      className={`w-full overflow-auto bg-white border border-slate-200 rounded-lg shadow-2xs select-none ${
+        fillHeight ? 'h-full min-h-0' : 'max-h-[calc(100vh-215px)]'
+      }`}
+    >
+      {/* border-separate + spacing-0：border-collapse 下 sticky thead 在横向滚动后会丢失吸顶 */}
+      <table ref={tableRef} className="w-full text-left border-separate border-spacing-0 min-w-full">
+        {/* Table Header（每个 th 自己 sticky top，才能与左侧冻结列的 left 叠加生效） */}
+        <thead className="bg-slate-100 text-slate-700 text-[11.5px] font-semibold border-b border-slate-300 uppercase tracking-wider sticky top-0 z-30">
           <tr className="h-8">
             {/* Checkbox column */}
-            <th className="w-9 px-2 text-center border-r border-slate-200 shrink-0">
+            <th className="w-9 px-2 text-center border-r border-slate-200 shrink-0 sticky left-0 z-40 bg-slate-100"
+              style={{ width: 36, minWidth: 36 }}>
               <input
                 type="checkbox"
                 checked={allChecked}
@@ -530,20 +842,31 @@ export const BitableTable = <T extends { id: string }>({
             </th>
 
             {/* Row Number */}
-            <th className="w-10 px-1 text-center border-r border-slate-200 text-slate-400 font-mono text-[10.5px]">
+            <th className="w-10 px-1 text-center border-r border-slate-200 text-slate-400 font-mono text-[10.5px] sticky left-[36px] z-40 bg-slate-100"
+              style={{ width: 40, minWidth: 40 }}>
               #
             </th>
 
             {/* Dynamic visible columns */}
             {visibleColumns.map((col) => {
               const isEditing = editingColId === col.id;
-              const isFieldLocked = !!col.isLocked || !col.editable;
-              // 与 EditableCell 的判定保持完全一致：表头能改名 ⇔ 单元格能编辑
-              const isFieldEditable = !!col.editable && col.type !== 'action' && !col.isLocked;
+              // 表头锁图标 / 解锁按钮只反映「显式锁定」，不能把 editable:false（单元格只读）也算成锁定，
+              // 否则点解锁后图标永远是 lock（主键、图名、版本等系统字段都中招）。
+              const isFieldLocked = !!col.isLocked;
+              // 锁图标三态（2026-10-29 用户定稿）：
+              // 灰 = 未锁定（可点击锁定）；黄 = 普通锁定（可解锁编辑）；
+              // 红 = 后端固定字段（识别来源），列定义受保护、不可解锁。
+              const isLockProtected = isFieldLocked && !!isLockProtectedColumn?.(col.id);
+              // 改名入口只看显式锁定，与字段配置弹层一致；单元格能否编辑由 EditableCell 自行判定
+              // 后台字段（附件 / 按钮列）也允许改名：label 只影响表头文字，render 仍按 id 绑定
+              const isFieldRenamable = !col.isLocked;
+              const frozenLeft = frozenLeftMap[col.id];
+              const isFrozenCol = frozenLeft !== undefined;
 
               return (
                 <th
                   key={col.id}
+                  data-col-id={col.id}
                   draggable={!!onReorderColumns && !isEditing}
                   onDragStart={(e) => {
                     if (!onReorderColumns) return;
@@ -578,8 +901,10 @@ export const BitableTable = <T extends { id: string }>({
                     setDragOverColId(null);
                   }}
                   title={onReorderColumns ? '按住表头可左右拖动，调整列顺序' : undefined}
-                  className={`relative border-r border-slate-200 whitespace-nowrap text-slate-700 font-medium group/col ${
-                    isEditing ? 'px-1.5 bg-blue-50/70' : 'px-3'
+                  className={`relative border-r border-slate-200 whitespace-nowrap text-slate-700 font-medium group/col bg-slate-100 ${
+                    isFrozenCol ? 'sticky z-40' : ''
+                  } ${col.id === lastFrozenId ? 'shadow-[1px_0_0_0_#cbd5e1]' : ''} ${
+                    isEditing ? 'px-1.5 bg-blue-50/70' : 'px-1.5'
                   } ${onReorderColumns ? 'cursor-grab active:cursor-grabbing' : ''} ${
                     dragColId === col.id ? 'opacity-40' : ''
                   } ${
@@ -587,7 +912,11 @@ export const BitableTable = <T extends { id: string }>({
                       ? 'bg-blue-50/70 shadow-[inset_2px_0_0_0_#005BAC]'
                       : ''
                   }`}
-                  style={{ width: effectiveWidth(col), minWidth: effectiveMinWidth(col) }}
+                  style={{
+                    width: effectiveWidth(col),
+                    minWidth: effectiveMinWidth(col),
+                    ...(isFrozenCol ? { left: frozenLeft } : {})
+                  }}
                 >
                   {isEditing ? (
                     <div className="flex items-center gap-1 py-0.5" onClick={(e) => e.stopPropagation()}>
@@ -628,23 +957,23 @@ export const BitableTable = <T extends { id: string }>({
                       </button>
                     </div>
                   ) : (
-                    <div className="flex items-center justify-between gap-1.5">
-                      <div className="flex items-center gap-1 truncate min-w-0">
+                    <div className="flex items-center justify-between gap-1">
+                      <div className="flex items-center gap-0.5 truncate min-w-0">
                         <span
                           className={`truncate select-none ${
-                            isFieldEditable && onRenameColumn
+                            isFieldRenamable && onRenameColumn
                               ? 'cursor-pointer hover:text-[#005BAC] transition-colors'
                               : ''
                           }`}
                           title={
-                            isFieldEditable && onRenameColumn
-                              ? '双击或点击笔符号修改字段名称'
-                              : isFieldLocked
-                              ? '已锁定受控字段（不可更改名称与表格内容，可在“字段配置”中解锁）'
-                              : '管理员配置字段（不可更改名称与表格内容）'
+                            isFieldLocked
+                              ? '已锁定受控字段（不可改名称，也无法改表内数据），可在“字段配置”中解锁'
+                              : isFieldRenamable && onRenameColumn
+                              ? `双击或点击笔符号修改字段名称${col.editable ? '' : '（该字段内容为只读）'}`
+                              : '此字段不可改名'
                           }
                           onDoubleClick={(e) => {
-                            if (isFieldEditable) {
+                            if (isFieldRenamable) {
                               e.stopPropagation();
                               handleStartRename(col);
                             }
@@ -655,8 +984,10 @@ export const BitableTable = <T extends { id: string }>({
 
                         {isFieldLocked && col.type !== 'action' && !onToggleColumnLock && (
                           <span
-                            className="material-symbols-outlined text-[12px] text-amber-600/80 shrink-0"
-                            title="已锁定受控（只读保护）"
+                            className={`material-symbols-outlined text-[10px] shrink-0 ${
+                              isLockProtected ? 'text-red-600/80' : 'text-amber-600/80'
+                            }`}
+                            title={isLockProtected ? '系统固定字段（识别来源），列定义受保护，不可解锁' : '已锁定受控（只读保护）'}
                           >
                             lock
                           </span>
@@ -670,35 +1001,39 @@ export const BitableTable = <T extends { id: string }>({
                               onToggleColumnLock(col.id);
                             }}
                             className={`p-0.5 rounded cursor-pointer transition-colors flex items-center justify-center shrink-0 ${
-                              isFieldLocked
+                              isLockProtected
+                                ? 'text-red-600 hover:bg-red-50'
+                                : isFieldLocked
                                 ? 'text-amber-600 hover:bg-amber-100'
-                                : 'text-slate-300 hover:text-slate-600 hover:bg-slate-200/60 opacity-0 group-hover/col:opacity-100'
+                                : 'text-slate-300 hover:text-slate-600 hover:bg-slate-200/60 opacity-0 group-hover/col:opacity-100 focus-visible:opacity-100'
                             }`}
                             title={
-                              isFieldLocked
+                              isLockProtected
+                                ? '系统固定字段（识别来源），列定义受保护，不可解锁，也不可修改表中数据'
+                                : isFieldLocked
                                 ? '该字段【已锁定】（受控只读，禁止修改表中数据）。点击即可解锁'
                                 : '该字段【未锁定】。点击即可锁定保护此字段'
                             }
                           >
-                            <span className="material-symbols-outlined text-[12px] leading-none">
+                            <span className="material-symbols-outlined text-[10px] leading-none">
                               {isFieldLocked ? 'lock' : 'lock_open'}
                             </span>
                           </button>
                         )}
                       </div>
 
-                      {/* Only editable / custom columns display the pencil symbol; admin columns do NOT display any pencil */}
-                      {isFieldEditable && onRenameColumn && (
+                      {/* 改名铅笔：只看显式锁定（主键、系统只读字段也可改名） */}
+                      {isFieldRenamable && onRenameColumn && (
                         <button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
                             handleStartRename(col);
                           }}
-                          className="p-0.5 -mr-1 rounded cursor-pointer transition-all flex items-center justify-center shrink-0 text-slate-400 hover:text-[#005BAC] hover:bg-blue-50"
-                          title="点击修改字段名称（表中内容亦可修改）"
+                          className="p-0.5 -mr-1 rounded cursor-pointer transition-all flex items-center justify-center shrink-0 text-slate-400 hover:text-[#005BAC] hover:bg-blue-50 opacity-0 group-hover/col:opacity-100 focus-visible:opacity-100"
+                          title={col.editable ? '点击修改字段名称（表中内容亦可修改）' : '点击修改字段名称（该字段内容为只读）'}
                         >
-                          <span className="material-symbols-outlined text-[12px] leading-none">
+                          <span className="material-symbols-outlined text-[11px] leading-none">
                             edit
                           </span>
                         </button>
@@ -812,7 +1147,7 @@ export const BitableTable = <T extends { id: string }>({
                         <tr
                           key={row.id}
                           data-row-id={row.id}
-                          onClick={() => onSelectRow?.(row)}
+                          onClick={(e) => handleRowClick(row, e)}
                           onContextMenu={(e) => openCtxMenu(e, row.id)}
                           onDragOver={(e) => {
                             const dragId = dragRowIdRef.current;
@@ -847,16 +1182,18 @@ export const BitableTable = <T extends { id: string }>({
                             setDragRowId(null);
                             setDropHint(null);
                           }}
-                          className={`cursor-pointer transition-colors group ${rowHeightClass} ${
+                          className={`cursor-pointer transition-colors group relative z-0 ${rowHeightClass} ${
+                            fillTargetSet.has(row.id) ? 'fill-target' : ''
+                          } ${
                             dragRowId === row.id ? 'opacity-40' : ''
-                          } ${dropHintClass(row.id)} ${
+                          } ${
                             rowColorStyle?.className
                               ? rowColorStyle.className
-                              : isSelected
-                              ? 'bg-blue-50/70 font-medium'
+                              : isSelected || isChecked
+                              ? 'bg-blue-50 font-medium'
                               : index % 2 === 1
-                              ? 'bg-slate-50/40 hover:bg-slate-100/70'
-                              : 'bg-white hover:bg-slate-100/70'
+                              ? 'bg-slate-50 hover:bg-slate-100'
+                              : 'bg-white hover:bg-slate-100'
                           }`}
                           style={
                             rowColorStyle?.style
@@ -866,14 +1203,14 @@ export const BitableTable = <T extends { id: string }>({
                         >
                           {/* Checkbox */}
                           <td
-                            className="px-2 text-center border-r border-slate-200 whitespace-nowrap"
-                            style={{ boxShadow: selectionOutline(isSelected, true, false) }}
+                            className="px-2 text-center border-r border-slate-200 whitespace-nowrap sticky left-0 z-10 bg-inherit"
+                            style={{ width: 36, minWidth: 36, boxShadow: selectionOutline(isSelected, true, false) }}
                             onClick={(e) => e.stopPropagation()}
                           >
                             <input
                               type="checkbox"
                               checked={isChecked}
-                              onClick={(e) => onToggleCheck(row.id, e)}
+                              onClick={(e) => handleCheckboxClick(row, e)}
                               onChange={() => {}}
                               className="w-3.5 h-3.5 rounded border-slate-300 text-[#005BAC] focus:ring-0 cursor-pointer"
                             />
@@ -881,8 +1218,10 @@ export const BitableTable = <T extends { id: string }>({
 
                           {/* 行号 / 拖动把手 / 删除 */}
                           <td
-                            className="px-0 text-center border-r border-slate-200 font-mono text-[10.5px] text-slate-400 relative"
+                            className="px-0 text-center border-r border-slate-200 font-mono text-[10.5px] text-slate-400 relative sticky left-[36px] z-10 bg-inherit"
                             style={{
+                              width: 40,
+                              minWidth: 40,
                               boxShadow: selectionOutline(isSelected, false, visibleColumns.length === 0)
                             }}
                           >
@@ -955,23 +1294,31 @@ export const BitableTable = <T extends { id: string }>({
                             const val = (row as any)[col.id];
                             const cellColorStyle = getCellColorStyle(row, col.id);
                             const isFirstCol = colIndex === 0 && pcEnabled;
+                            const frozenLeft = frozenLeftMap[col.id];
+                            const isFrozenCol = frozenLeft !== undefined;
+                            const outline = selectionOutline(
+                              isSelected,
+                              false,
+                              colIndex === visibleColumns.length - 1
+                            );
+                            const frozenEdge = isFrozenCol && col.id === lastFrozenId;
 
                             return (
                               <td
                                 key={col.id}
-                                className={`px-3 border-r border-slate-200 whitespace-nowrap overflow-hidden transition-colors ${
-                                  cellColorStyle?.className || ''
-                                }`}
+                                className={`group/cell px-1.5 border-r border-slate-200 whitespace-nowrap overflow-hidden transition-colors ${
+                                  isFrozenCol ? 'sticky z-10' : 'relative'
+                                } ${cellColorStyle?.className || (isFrozenCol ? 'bg-inherit' : '')}`}
                                 style={{
                                   width: effectiveWidth(col),
                                   minWidth: effectiveMinWidth(col),
                                   paddingLeft: isFirstCol ? `${8 + depth * 18}px` : undefined,
                                   ...(cellColorStyle?.style || {}),
-                                  boxShadow: selectionOutline(
-                                    isSelected,
-                                    false,
-                                    colIndex === visibleColumns.length - 1
-                                  )
+                                  ...(isFrozenCol ? { left: frozenLeft } : {}),
+                                  boxShadow:
+                                    [outline, frozenEdge ? '1px 0 0 0 #cbd5e1' : '']
+                                      .filter(Boolean)
+                                      .join(', ') || undefined
                                 }}
                               >
                                 {isFirstCol ? (
@@ -1010,6 +1357,16 @@ export const BitableTable = <T extends { id: string }>({
                                     onUpdate={(newVal) => onUpdateCell(row.id, col.id, newVal)}
                                   />
                                 )}
+
+                                {/* 拖拽填充手柄：悬停单元格时出现在右下角 */}
+                                {canFillColumn(col) && (
+                                  <span
+                                    onMouseDown={(e) => beginFill(e, row, col)}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="absolute bottom-0 right-0 z-20 w-2 h-2 rounded-[1px] bg-[#005BAC] border border-white cursor-crosshair opacity-0 pointer-events-none group-hover/cell:opacity-100 group-hover/cell:pointer-events-auto transition-opacity"
+                                    title="按住上下拖动：按规律递增 / 复制填充（按住 Shift 只复制；Ctrl+Z 可撤销）"
+                                  />
+                                )}
                               </td>
                             );
                           })}
@@ -1022,6 +1379,21 @@ export const BitableTable = <T extends { id: string }>({
           )}
         </tbody>
       </table>
+
+      {/* 拖拽填充预览提示：跟随目标区间底部，显示行数与末行结果 */}
+      {fillDrag && (
+        <div
+          style={{
+            position: 'fixed',
+            left: fillDrag.chip.x,
+            top: fillDrag.chip.y,
+            zIndex: 9999
+          }}
+          className="pointer-events-none px-1.5 py-0.5 rounded bg-[#005BAC] text-white text-[10.5px] font-medium shadow-lg whitespace-nowrap"
+        >
+          {fillDrag.label}
+        </div>
+      )}
 
       {/* 行右键菜单：插入 / 复制 / 层级 / 删除 */}
       {ctxMenu &&

@@ -1,18 +1,45 @@
-import type { ReactNode } from 'react';
+export type BitableFieldType =
+  | 'text'
+  | 'number'
+  | 'select'
+  | 'multiSelect'
+  | 'date'
+  | 'badge'
+  | 'boolean'
+  | 'url'
+  | 'user'
+  | 'group'
+  | 'attachment'
+  | 'action';
 
-export type BitableFieldType = 'text' | 'number' | 'select' | 'date' | 'badge' | 'boolean' | 'action';
-
+/**
+ * 字段类型元数据。label 为 UI 展示名，key 为持久化标识——**只改 label，不要改 key**。
+ *
+ * 顺序对齐飞书多维表的「常规」分组（本平台暂不提供「公式」与「查找引用」：
+ * 两者都需要后端解析引擎，纯前端 SPA 无法真实求值，只能做假数据，故不引入）。
+ * `badge` / `action` 是本平台扩展：前者用于彩色状态徽标，后者是后台程序参与计算匹配的只读列。
+ */
 export const BITABLE_FIELD_TYPE_META: Record<
   BitableFieldType,
   { label: string; icon: string; desc: string; color: string }
 > = {
-  text: { label: '文本型', icon: 'short_text', desc: '常规文本输入与显示', color: 'text-blue-600 bg-blue-50 border-blue-200' },
-  number: { label: '数字型', icon: 'pin', desc: '数值、工程量、尺寸', color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
-  select: { label: '下拉单选', icon: 'arrow_drop_down_circle', desc: '预设候选项，单选枚举', color: 'text-purple-600 bg-purple-50 border-purple-200' },
-  date: { label: '日期型', icon: 'calendar_today', desc: '年月日日期选择', color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
-  boolean: { label: '复选/布尔', icon: 'check_box', desc: '是/否、完成/未完成', color: 'text-amber-600 bg-amber-50 border-amber-200' },
+  text: { label: '文本', icon: 'short_text', desc: '常规文本输入与显示', color: 'text-blue-600 bg-blue-50 border-blue-200' },
+  select: { label: '单选', icon: 'radio_button_checked', desc: '预设候选项，单选枚举', color: 'text-purple-600 bg-purple-50 border-purple-200' },
+  multiSelect: { label: '多选', icon: 'checklist', desc: '预设候选项，可多值叠加', color: 'text-violet-600 bg-violet-50 border-violet-200' },
+  user: { label: '人员', icon: 'person', desc: '责任人 / 参与人，可多人', color: 'text-teal-600 bg-teal-50 border-teal-200' },
+  group: { label: '群组', icon: 'groups', desc: '部门 / 协作群组', color: 'text-orange-600 bg-orange-50 border-orange-200' },
+  date: { label: '日期', icon: 'calendar_today', desc: '年月日日期选择', color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
+  attachment: { label: '附件', icon: 'attach_file', desc: 'PDF / 图片等附件文件', color: 'text-rose-600 bg-rose-50 border-rose-200' },
+  number: { label: '数字', icon: 'pin', desc: '数值、工程量、尺寸', color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
+  boolean: { label: '复选框', icon: 'check_box', desc: '是/否、完成/未完成', color: 'text-amber-600 bg-amber-50 border-amber-200' },
+  url: { label: '超链接', icon: 'link', desc: '网址 / 云盘 / 二维码链接', color: 'text-sky-600 bg-sky-50 border-sky-200' },
   badge: { label: '状态标签', icon: 'label', desc: '彩色胶囊状态徽标', color: 'text-cyan-600 bg-cyan-50 border-cyan-200' },
-  action: { label: '操作列', icon: 'settings', desc: '系统操作栏', color: 'text-slate-600 bg-slate-100 border-slate-200' }
+  action: {
+    label: '后台字段',
+    icon: 'dns',
+    desc: '后台程序计算匹配，前端不可修改',
+    color: 'text-slate-600 bg-slate-100 border-slate-200'
+  }
 };
 
 export type BitableDensity = 'compact' | 'medium' | 'relaxed';
@@ -41,10 +68,10 @@ export interface BitableColumnConfig<T = any> {
   description?: string;
   isCustom?: boolean; // 是否为用户自定义添加的字段
   // 自定义渲染函数（可选）
-  render?: (row: T, value: any, onUpdate?: (val: any) => void) => ReactNode;
+  render?: (row: T, value: any, onUpdate?: (val: any) => void) => React.ReactNode;
   /**
    * 附件来源解析（可选）。
-   * 用于「附件不在本行字段上」的场景——例如附件其实挂在关联记录上，
+   * 用于「附件不在本行字段上」的场景——例如技术文件台账的附件其实挂在关联图纸上，
    * 画册视图/附件列通过它拿到文件列表，而不是去读 row[col.id]。
    */
   resolveFiles?: (row: T) => { name: string; size?: string; url?: string }[];
@@ -117,6 +144,7 @@ export interface BitableViewConfig {
   viewType?: BitableViewType; // grid(表格) | kanban(看板) | gallery(画册) | gantt(甘特) | calendar(日历) | form(表单)
   scope?: BitableViewScope; // 'collaborative' (协作视图) | 'personal' (个人视图)
   isLocked?: boolean; // 锁定视图配置，防止被协作者误修改
+  pinned?: boolean; // 固定标签卡：不可删除/重命名
   description?: string; // 视图说明
   filterLogic: 'AND' | 'OR';
   filterRules: BitableFilterRule[];
@@ -127,9 +155,10 @@ export interface BitableViewConfig {
   colorRules: BitableColorRule[];
   visibleColumnIds: string[];
   columnOrder: string[];
+  hiddenFieldIds?: string[]; // 视图级隐藏字段：仅当前视图不显示这些列，其他视图不受影响（飞书式字段显隐）
   // —— 父子记录（对齐飞书多维表，表格视图生效） ——
   parentChildEnabled?: boolean; // 开启后按「父级字段」建立行层级，父行可展开/折叠
-  parentFieldId?: string | null; // 父级字段：其值填写父记录的主键值，留空即为顶层记录
+  parentFieldId?: string | null; // 父级字段：其值填写父记录的主键值（如图号），留空即为顶层记录
   // —— 视图类型专属配置（新建视图时选定类型后，配置面板按类型显示对应项） ——
   kanbanFieldId?: string | null; // 看板：泳道分组字段（默认自动识别 状态/专业）
   galleryCoverFieldId?: string | null; // 画册：封面字段（默认蓝图占位）

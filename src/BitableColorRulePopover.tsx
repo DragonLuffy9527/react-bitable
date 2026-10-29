@@ -35,7 +35,7 @@ export const businessColorSwatches: ColorSwatchItem[] = [
   { label: '薄荷清爽', bgColor: '#f0fdfa', textColor: '#0f766e', borderColor: '#5eead4', bgClass: 'bg-teal-50', textClass: 'text-teal-700' },
 
   // 提示蓝
-  { label: '主题浅蓝', bgColor: '#eff6ff', textColor: '#005BAC', borderColor: '#93c5fd', bgClass: 'bg-blue-50', textClass: 'text-[#005BAC]' },
+  { label: '中建浅蓝', bgColor: '#eff6ff', textColor: '#005BAC', borderColor: '#93c5fd', bgClass: 'bg-blue-50', textClass: 'text-[#005BAC]' },
   { label: '提示天蓝', bgColor: '#f0f9ff', textColor: '#0369a1', borderColor: '#7dd3fc', bgClass: 'bg-sky-50', textClass: 'text-sky-700' },
   { label: '青蓝信息', bgColor: '#ecfeff', textColor: '#0e7490', borderColor: '#67e8f9', bgClass: 'bg-cyan-50', textClass: 'text-cyan-700' },
 
@@ -71,7 +71,7 @@ export const colorMatrixPalette: { name: string; hex: string; text: string }[] =
   { name: '薄荷青', hex: '#ccfbf1', text: '#115e59' },
   { name: '冰川蓝', hex: '#e0f2fe', text: '#075985' },
   { name: '天水蓝', hex: '#bae6fd', text: '#0369a1' },
-  { name: '主题浅蓝', hex: '#dbeafe', text: '#005BAC' },
+  { name: '中建浅蓝', hex: '#dbeafe', text: '#005BAC' },
   { name: '晴空蓝', hex: '#bfdbfe', text: '#1e40af' },
   { name: '靛青蓝', hex: '#93c5fd', text: '#1e3a8a' },
 
@@ -220,7 +220,7 @@ export const BitableColorRulePopover = <T,>({
           <div className="text-center py-8 text-slate-400 text-[12px] bg-slate-50 rounded-lg border border-dashed border-slate-200 space-y-2">
             <span className="material-symbols-outlined text-[32px] text-slate-300 block">format_color_fill</span>
             <div className="font-medium text-slate-600">暂无生效的填色规则</div>
-            <div className="text-[11px] text-slate-400">点击下方按钮可针对任意字段添加高亮着色规则</div>
+            <div className="text-[11px] text-slate-400">点击下方按钮可针对版本、性质、图号等任意字段添加高亮着色</div>
           </div>
         ) : (
           colorRules.map((rule, idx) => {
@@ -270,7 +270,7 @@ export const BitableColorRulePopover = <T,>({
                       type="text"
                       value={rule.value}
                       onChange={(e) => handleChangeRule(rule.id, { value: e.target.value })}
-                      placeholder="匹配文本（如 进行中、P0）"
+                      placeholder="匹配文本 (如: Draft 或 差异)"
                       className="flex-1 min-w-0 h-7 px-2 text-[11.5px] bg-white border border-slate-300 rounded text-slate-900 focus:outline-none focus:ring-1 focus:ring-[#005BAC]"
                     />
                   )}
@@ -500,7 +500,7 @@ export const BitableColorRulePopover = <T,>({
                           <div className="flex items-center gap-2">
                             <span className="material-symbols-outlined text-[16px]">visibility</span>
                             <span className="font-bold text-[12px]">
-                              单元格渲染预览效果：Draft 预审稿 · 重点版本标注
+                              单元格渲染预览效果：Draft · 重点版本标注
                             </span>
                           </div>
                           <span className="font-mono text-[10.5px] opacity-80">

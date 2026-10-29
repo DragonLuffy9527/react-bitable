@@ -192,18 +192,16 @@ export const BitableCalendarView = <T extends { id: string }>({
                   </div>
                   <div className="space-y-0.5">
                     {dayItems.slice(0, 3).map(({ row }) => {
-                      // 按列配置取主字段，避免退化成 row.id
+                      // 按列配置取主字段，避免非图纸台账落到 row.id
                       const card = buildCardModel(columns, row);
                       const label = card.title || String(row.id);
                       const isSelected = selectedRowId === row.id;
                       const statusText = card.status?.text || '';
-                      // 状态词义 → 胶囊色调（异常类红、完成类绿、其余蓝），只做视觉分组，不改数据
-                      const tone =
-                        /阻塞|异常|失败|驳回|延期/.test(statusText)
-                          ? 'bg-rose-50 text-rose-700 border-rose-200'
-                          : /完成|通过|核准|归档|关闭/.test(statusText)
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : 'bg-blue-50 text-[#005BAC] border-blue-200';
+                      const tone = statusText.includes('差异')
+                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                        : statusText.includes('核准') || statusText.includes('归档')
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : 'bg-blue-50 text-[#005BAC] border-blue-200';
                       return (
                         <button
                           key={row.id}
