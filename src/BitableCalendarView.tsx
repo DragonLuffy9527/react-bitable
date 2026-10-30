@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { BitableColumnConfig, BitableViewConfig } from './types';
 import { buildCardModel } from './cardModel';
+import { BitableIcon } from './BitableIcon';
 
 interface BitableCalendarViewProps<T extends { id: string }> {
   items: T[];
@@ -150,7 +151,7 @@ export const BitableCalendarView = <T extends { id: string }>({
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200 sticky top-0 bg-white z-10">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[18px] text-[#005BAC]">calendar_month</span>
+          <BitableIcon name="calendar_month" className="text-[18px] text-[#005BAC]" />
           <span className="font-bold text-slate-800 text-[13.5px]">
             {cursor.getFullYear()} 年 {cursor.getMonth() + 1} 月
           </span>
@@ -169,7 +170,7 @@ export const BitableCalendarView = <T extends { id: string }>({
             className="w-6 h-6 rounded hover:bg-slate-100 text-slate-500 flex items-center justify-center cursor-pointer"
             title="上个月"
           >
-            <span className="material-symbols-outlined text-[16px]">chevron_left</span>
+            <BitableIcon name="chevron_left" className="text-[16px]" />
           </button>
           <button
             type="button"
@@ -184,7 +185,7 @@ export const BitableCalendarView = <T extends { id: string }>({
             className="w-6 h-6 rounded hover:bg-slate-100 text-slate-500 flex items-center justify-center cursor-pointer"
             title="下个月"
           >
-            <span className="material-symbols-outlined text-[16px]">chevron_right</span>
+            <BitableIcon name="chevron_right" className="text-[16px]" />
           </button>
         </div>
       </div>

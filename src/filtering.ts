@@ -48,7 +48,7 @@ export const ORDERED_OPERATORS: FilterOperator[] = [
 ];
 
 export function resolveComparableKind(type: BitableFieldType | undefined): ComparableKind {
-  if (type === 'number') return 'number';
+  if (type === 'number' || type === 'currency' || type === 'progress' || type === 'rating') return 'number';
   if (type === 'date') return 'date';
   return 'text';
 }

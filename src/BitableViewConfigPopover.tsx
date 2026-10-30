@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { BitableColumnConfig, BitableViewConfig, BitableViewScope } from './types';
+import { BitableIcon } from './BitableIcon';
 import { SUMMARY_LABELS, summaryOptionsFor } from './aggregate';
 import type { BitableSummaryType } from './aggregate';
 
@@ -124,7 +125,7 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
       {/* Header */}
       <div className="flex items-center justify-between pb-3 border-b border-slate-100">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[18px] text-[#005BAC]">tune</span>
+          <BitableIcon name="tune" className="text-[18px] text-[#005BAC]" />
           <span className="font-bold text-slate-900 text-[13px]">视图配置 (飞书多维表标准)</span>
         </div>
         <button
@@ -132,7 +133,7 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
           type="button"
           className="text-slate-400 hover:text-slate-600 rounded p-1 hover:bg-slate-100 cursor-pointer transition-colors"
         >
-          <span className="material-symbols-outlined text-[16px] block">close</span>
+          <BitableIcon name="close" className="text-[16px] block" />
         </button>
       </div>
 
@@ -143,7 +144,7 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
             <span>视图名称</span>
             {isLocked && (
               <span className="text-[10.5px] text-amber-600 font-normal flex items-center gap-0.5">
-                <span className="material-symbols-outlined text-[12px]">lock</span>
+                <BitableIcon name="lock" className="text-[12px]" />
                 视图已锁定
               </span>
             )}
@@ -152,20 +153,21 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
           {isMasterView ? (
             <div className="flex items-center justify-between bg-slate-50 p-2 rounded-lg border border-slate-200">
               <div className="flex items-center gap-2 font-bold text-slate-900 text-[12.5px]">
-                <span className="material-symbols-outlined text-[16px] text-[#005BAC]">grid_on</span>
+                <BitableIcon name="grid_on" className="text-[16px] text-[#005BAC]" />
                 <span>{activeView.name}</span>
               </div>
               <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10.5px] text-slate-500 bg-slate-200/70 rounded-full font-medium">
-                <span className="material-symbols-outlined text-[12px]">lock</span>
+                <BitableIcon name="lock" className="text-[12px]" />
                 系统基础总表 (不可删除)
               </span>
             </div>
           ) : !isRenaming ? (
             <div className="flex items-center justify-between bg-slate-50 p-2 rounded-lg border border-slate-200 hover:border-slate-300 transition-colors">
               <div className="flex items-center gap-2 font-bold text-slate-900 text-[12.5px]">
-                <span className="material-symbols-outlined text-[16px] text-[#005BAC]">
-                  {activeView.icon || 'table_chart'}
-                </span>
+                <BitableIcon
+                  name={(activeView.icon || 'table_chart') as any}
+                  className="text-[16px] text-[#005BAC]"
+                />
                 <span>{activeView.name}</span>
               </div>
               <button
@@ -228,7 +230,7 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
               }`}
             >
               <div className="flex items-center gap-1.5 text-[11.5px] font-bold">
-                <span className="material-symbols-outlined text-[15px]">public</span>
+                <BitableIcon name="public" className="text-[15px]" />
                 <span>协作视图</span>
               </div>
               <div className="text-[10px] text-slate-400 mt-0.5">全项目工程团队可见协同</div>
@@ -252,10 +254,10 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
               }`}
             >
               <div className="flex items-center gap-1.5 text-[11.5px] font-bold">
-                <span className="material-symbols-outlined text-[15px]">person</span>
+                <BitableIcon name="person" className="text-[15px]" />
                 <span>个人视图</span>
                 {isScopeLocked && (
-                  <span className="material-symbols-outlined text-[13px] text-slate-400">lock</span>
+                  <BitableIcon name="lock" className="text-[13px] text-slate-400" />
                 )}
               </div>
               <div className="text-[10px] text-slate-400 mt-0.5">
@@ -266,7 +268,7 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
 
           {isScopeLocked && (
             <div className="flex items-start gap-1.5 px-1 text-[10px] text-amber-700/90 leading-relaxed">
-              <span className="material-symbols-outlined text-[12px] mt-px">info</span>
+              <BitableIcon name="info" className="text-[12px] mt-px shrink-0" />
               <span>系统基础总表固定为协作视图（全项目可见），需要个人视图请在视图页签「+」新建。</span>
             </div>
           )}
@@ -274,9 +276,10 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
           {/* Lock view toggle */}
           <div className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 bg-slate-50/70">
             <div className="flex items-center gap-2">
-              <span className={`material-symbols-outlined text-[16px] ${isLocked ? 'text-amber-600' : 'text-slate-400'}`}>
-                {isLocked ? 'lock' : 'lock_open'}
-              </span>
+              <BitableIcon
+                name={isLocked ? 'lock' : 'lock_open'}
+                className={`text-[16px] ${isLocked ? 'text-amber-600' : 'text-slate-400'}`}
+              />
               <div>
                 <div className="text-[11.5px] font-bold text-slate-800">锁定当前视图配置</div>
                 <div className="text-[10px] text-slate-400">开启后防止协作者误改筛选/排序/分组条件</div>
@@ -718,7 +721,7 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
             }}
             className="w-full h-8 px-3 flex items-center gap-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-[11.5px] cursor-pointer transition-colors"
           >
-            <span className="material-symbols-outlined text-[15px] text-slate-500">content_copy</span>
+            <BitableIcon name="content_copy" className="text-[15px] text-slate-500" />
             <span>复制视图 (生成副本)</span>
           </button>
 
@@ -730,13 +733,13 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
             }}
             className="w-full h-8 px-3 flex items-center gap-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-[11.5px] cursor-pointer transition-colors"
           >
-            <span className="material-symbols-outlined text-[15px] text-slate-500">restart_alt</span>
+            <BitableIcon name="restart_alt" className="text-[15px] text-slate-500" />
             <span>重置视图配置 (恢复初始状态)</span>
           </button>
 
           {isMasterView ? (
             <div className="w-full h-8 px-3 flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-400 text-[11px] select-none">
-              <span className="material-symbols-outlined text-[14px]">lock</span>
+              <BitableIcon name="lock" className="text-[14px]" />
               <span>总表为系统基础视图，不可删除</span>
             </div>
           ) : totalViews > 1 ? (
@@ -748,7 +751,7 @@ export const BitableViewConfigPopover: React.FC<BitableViewConfigPopoverProps> =
               }}
               className="w-full h-8 px-3 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50/40 hover:bg-red-50 text-red-700 text-[11.5px] cursor-pointer transition-colors"
             >
-              <span className="material-symbols-outlined text-[15px] text-red-600">delete</span>
+              <BitableIcon name="delete" className="text-[15px] text-red-600" />
               <span>删除此业务视图</span>
             </button>
           ) : null}

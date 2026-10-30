@@ -37,6 +37,10 @@ import { createSyncQueue } from './dataSource';
 import type { BitableDataSource, BitableSyncState, SyncQueue } from './dataSource';
 import { applySchema, buildSchema, createSchemaSaver, mergeColumns, mergeViews } from './schema';
 import type { BitableSchemaSnapshot, SchemaSaver } from './schema';
+import { applySystemFieldsOnCreate, applySystemFieldsOnUpdate } from './systemFields';
+import { applyLookupsToRows } from './relations';
+import { isSystemFieldType } from './types';
+import type { BitableUser, BitableLinkedTableAccessor } from './types';
 
 interface UseBitableOptions<T> {
   storageKey: string;
@@ -44,6 +48,10 @@ interface UseBitableOptions<T> {
   defaultColumns: BitableColumnConfig<T>[];
   presetViews: BitableViewConfig[];
   onDataChange?: (data: T[]) => void;
+  /** 当前操作用户上下文（用于创建人/修改人等系统字段自动打点） */
+  currentUser?: BitableUser | string;
+  /** 跨表关联数据源解析器（用于 lookup 字段跨表投影） */
+  getLinkedTableData?: BitableLinkedTableAccessor;
   /**
    * 字段表结构版本号。代码侧统一调整字段命名/顺序/类型后把它改一下，
    * 老浏览器里存的列配置会被重置为代码定义（用户自定义列保留），
@@ -94,7 +102,9 @@ export function useBitable<T extends { id: string }>({
   selectionState,
   dataSource,
   syncDebounceMs,
-  onSyncStateChange
+  onSyncStateChange,
+  currentUser,
+  getLinkedTableData
 }: UseBitableOptions<T>) {
   /**
    * 1. Data state
@@ -852,15 +862,21 @@ export function useBitable<T extends { id: string }>({
 
   const addCustomColumn = (newCol: Omit<BitableColumnConfig<T>, 'visible'>) => {
     markHistory(`新增字段 ${newCol.label}`);
-    setColumns((prev) => [
-      ...prev,
-      {
-        ...newCol,
-        visible: true,
-        isCustom: true,
-        editable: newCol.isLocked ? false : (newCol.editable ?? true)
-      }
-    ]);
+    const isSys = isSystemFieldType(newCol.type);
+    const colToAdd: BitableColumnConfig<T> = {
+      ...newCol,
+      visible: true,
+      isCustom: true,
+      editable: (newCol.isLocked || isSys) ? false : (newCol.editable ?? true)
+    };
+    setColumns((prev) => [...prev, colToAdd]);
+    if (isSys) {
+      setData((prev) =>
+        prev.map((row) =>
+          applySystemFieldsOnCreate(row, [colToAdd], prev, currentUser)
+        )
+      );
+    }
   };
 
   const deleteColumn = (columnId: string): boolean => {
@@ -1183,14 +1199,38 @@ export function useBitable<T extends { id: string }>({
   };
 
   // 11. Row Operations (Inline Editing)
+  /**
+   * 生成一条真正的空白记录。
+   * 数组型字段（附件、版本历史等）给空数组，避免自定义渲染取 `.map` 时炸掉；
+   * 其余字段留空，单元格显示占位符，用户双击即可录入；
+   * 自动打点系统字段（创建时间/更新时间/创建人/更新人/自动编号）。
+   */
+  const makeBlankRow = (values?: Partial<T>): T => {
+    const template = (data[0] || initialData[0]) as Record<string, any> | undefined;
+    const base: Record<string, any> = {
+      id: `row_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+    };
+    if (template) {
+      Object.keys(template).forEach((key) => {
+        if (Array.isArray(template[key])) base[key] = [];
+      });
+    }
+    const combined = { ...base, ...values };
+    return applySystemFieldsOnCreate(combined, columns, data, currentUser) as T;
+  };
+
   const updateCell = (rowId: string, fieldId: string, value: any) => {
+    const targetCol = columns.find((c) => c.id === fieldId);
+    if (targetCol?.type === 'lookup') return; // lookup 字段由关联表动态投影，只读
+
     markHistory(`修改单元格 ${fieldId}`);
     setData((prev) =>
       prev.map((item) => {
         if (item.id === rowId) {
+          const auditPatch = applySystemFieldsOnUpdate({ [fieldId]: value }, columns, currentUser);
           return {
             ...item,
-            [fieldId]: value
+            ...auditPatch
           };
         }
         return item;
@@ -1216,18 +1256,16 @@ export function useBitable<T extends { id: string }>({
     setData((prev) =>
       prev.map((item) => {
         const patch = patchByRow.get(item.id);
-        return patch ? ({ ...item, ...patch } as T) : item;
+        if (!patch) return item;
+        const auditPatch = applySystemFieldsOnUpdate(patch, columns, currentUser);
+        return { ...item, ...auditPatch } as T;
       })
     );
   };
 
   const addRow = (initialValues?: Partial<T>) => {
     markHistory('新增记录');
-    const newId = `row_${Date.now()}`;
-    const newRow = {
-      id: newId,
-      ...initialValues
-    } as T;
+    const newRow = makeBlankRow(initialValues);
     setData((prev) => [newRow, ...prev]);
     return newRow;
   };
@@ -1304,24 +1342,6 @@ export function useBitable<T extends { id: string }>({
   };
 
   /**
-   * 生成一条真正的空白记录。
-   * 数组型字段（附件、版本历史等）给空数组，避免自定义渲染取 `.map` 时炸掉；
-   * 其余字段留空，单元格显示占位符，用户双击即可录入。
-   */
-  const makeBlankRow = (values?: Partial<T>): T => {
-    const template = (data[0] || initialData[0]) as Record<string, any> | undefined;
-    const base: Record<string, any> = {
-      id: `row_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
-    };
-    if (template) {
-      Object.keys(template).forEach((key) => {
-        if (Array.isArray(template[key])) base[key] = [];
-      });
-    }
-    return { ...base, ...values } as T;
-  };
-
-  /**
    * 插入空白记录。anchorRowId 为空时追加到表尾；
    * position='child' 时同时把新行挂到锚点行下面（自动开启父子记录）。
    */
@@ -1374,15 +1394,77 @@ export function useBitable<T extends { id: string }>({
     return newRow;
   };
 
-  /** 复制某行到其下方（含所有字段值，仅换新 id） */
+  /**
+   * 批量插入记录。
+   * anchorRowId 为空时追加到表尾；
+   * anchorRowId 存在时在锚点行下方 (或上方) 依序插入 count 行。
+   */
+  const insertRows = (
+    count: number = 1,
+    anchorRowId?: string | null,
+    position: 'above' | 'below' = 'below',
+    values?: Partial<T> | ((index: number) => Partial<T>)
+  ): T[] => {
+    const validCount = Math.max(1, Math.min(1000, Math.floor(count) || 1));
+    markHistory(validCount > 1 ? `批量添加 ${validCount} 条记录` : '添加记录');
+
+    const primaryCol = columns.find((c) => c.id === primaryFieldId);
+    const primaryLocked = !!primaryCol && (!!primaryCol.isLocked || primaryCol.editable === false);
+    const used = new Set(data.map((r) => String((r as any)[primaryFieldId!] ?? '').trim()));
+    let serial = data.length + 1;
+
+    const newRows: T[] = [];
+    for (let i = 0; i < validCount; i += 1) {
+      const rowValues = typeof values === 'function' ? values(i) : values;
+      const newRow = makeBlankRow(rowValues);
+      (newRow as any).id = `row_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 7)}`;
+
+      if (primaryFieldId && primaryLocked && (newRow as any)[primaryFieldId] === undefined) {
+        let candidate = `新建-${String(serial).padStart(3, '0')}`;
+        while (used.has(candidate)) {
+          serial += 1;
+          candidate = `新建-${String(serial).padStart(3, '0')}`;
+        }
+        used.add(candidate);
+        (newRow as any)[primaryFieldId] = candidate;
+        serial += 1;
+      }
+      newRows.push(newRow);
+    }
+
+    setData((prev) => {
+      const next = [...prev];
+      if (!anchorRowId) {
+        next.push(...newRows);
+        return next;
+      }
+      const idx = next.findIndex((r) => r.id === anchorRowId);
+      if (idx < 0) {
+        next.push(...newRows);
+        return next;
+      }
+      next.splice(position === 'above' ? idx : idx + 1, 0, ...newRows);
+      return next;
+    });
+
+    return newRows;
+  };
+
+  /** 复制某行到其下方（含所有字段值，仅换新 id，并重新打点系统创建时间与自动编号） */
   const duplicateRow = (rowId: string): T | null => {
     const source = data.find((r) => r.id === rowId);
     if (!source) return null;
     markHistory('复制记录');
-    const copy = {
+    const copyDraft: Record<string, any> = {
       ...(source as any),
       id: `row_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
-    } as T;
+    };
+    for (const c of columns) {
+      if (c.type === 'createdTime' || c.type === 'updatedTime' || c.type === 'autoNumber') {
+        delete copyDraft[c.id];
+      }
+    }
+    const copy = applySystemFieldsOnCreate(copyDraft, columns, data, currentUser) as T;
     setData((prev) => {
       const next = [...prev];
       const idx = next.findIndex((r) => r.id === rowId);
@@ -1502,9 +1584,10 @@ export function useBitable<T extends { id: string }>({
 
   // 12. Computation Pipeline: Filter -> Sort -> Group
   const processedData = useMemo(() => {
-    let result = [...data];
+    // (0) 动态计算并投影跨表 Lookup 字段
+    let result = applyLookupsToRows(data, columns, getLinkedTableData);
 
-    // (0) 全局关键词搜索 (Search Query Filter across all fields)
+    // (0.1) 全局关键词搜索 (Search Query Filter across all fields)
     const trimmedQuery = searchQuery.trim().toLowerCase();
     if (trimmedQuery) {
       result = result.filter((row) => {
@@ -1757,6 +1840,7 @@ export function useBitable<T extends { id: string }>({
     deleteRow,
     deleteRows,
     insertRow,
+    insertRows,
     duplicateRow,
     detachRow,
     moveRow,
@@ -1764,6 +1848,7 @@ export function useBitable<T extends { id: string }>({
     primaryFieldId,
     parentFieldId,
     searchQuery,
-    setSearchQuery
+    setSearchQuery,
+    getLinkedTableData
   };
 }

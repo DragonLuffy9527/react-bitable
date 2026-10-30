@@ -1,5 +1,6 @@
 import React from 'react';
 import { BitableColumnConfig, BitableGroupRule } from './types';
+import { BitableIcon } from './BitableIcon';
 
 interface BitableGroupPopoverProps<T> {
   columns: BitableColumnConfig<T>[];
@@ -109,7 +110,7 @@ export const BitableGroupPopover = <T,>({
       {/* Header */}
       <div className="flex items-center justify-between px-3.5 py-2.5 bg-slate-50 border-b border-slate-200/80">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[17px] text-[#005BAC]">grid_view</span>
+          <BitableIcon name="grid_view" className="text-[17px] text-[#005BAC]" />
           <span className="font-bold text-slate-900 text-[12.5px]">分组设置</span>
           {activeRules.length > 0 && (
             <span className="px-1.5 py-0.2 bg-blue-50 text-[#005BAC] text-[10.5px] font-bold rounded-full">
@@ -125,9 +126,10 @@ export const BitableGroupPopover = <T,>({
               className="text-[11px] text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 px-1.5 py-0.5 rounded transition-colors flex items-center gap-1"
               title={isAllCollapsed ? '展开全部嵌套分组' : '收起全部嵌套分组'}
             >
-              <span className="material-symbols-outlined text-[13px]">
-                {isAllCollapsed ? 'unfold_more' : 'unfold_less'}
-              </span>
+              <BitableIcon
+                name={isAllCollapsed ? 'unfold_more' : 'unfold_less'}
+                className="text-[13px]"
+              />
               <span>{isAllCollapsed ? '全部展开' : '全部收起'}</span>
             </button>
           )}
@@ -136,7 +138,7 @@ export const BitableGroupPopover = <T,>({
             type="button"
             className="text-slate-400 hover:text-slate-700 rounded p-1 hover:bg-slate-200/60 transition-colors"
           >
-            <span className="material-symbols-outlined text-[15px] block">close</span>
+            <BitableIcon name="close" className="text-[15px] block" />
           </button>
         </div>
       </div>
@@ -149,9 +151,7 @@ export const BitableGroupPopover = <T,>({
         {/* Rules list */}
         {activeRules.length === 0 ? (
           <div className="py-6 px-4 bg-slate-50/80 border border-dashed border-slate-200 rounded-lg text-center text-slate-400">
-            <span className="material-symbols-outlined text-[26px] text-slate-300 block mb-1">
-              table_rows_narrow
-            </span>
+            <BitableIcon name="table_rows_narrow" className="text-[26px] text-slate-300 block mb-1 mx-auto" />
             <div className="text-[12px] text-slate-600 font-medium">当前为平铺展示 (未设置分组)</div>
             <div className="text-[11px] text-slate-400 mt-0.5">点击下方按钮添加多层级分组条件</div>
           </div>
@@ -186,7 +186,7 @@ export const BitableGroupPopover = <T,>({
                         }`}
                         title="上移此级分组"
                       >
-                        <span className="material-symbols-outlined text-[13px] block">arrow_upward</span>
+                        <BitableIcon name="arrow_upward" className="text-[13px] block" />
                       </button>
                       {/* Move down */}
                       <button
@@ -198,7 +198,7 @@ export const BitableGroupPopover = <T,>({
                         }`}
                         title="下移此级分组"
                       >
-                        <span className="material-symbols-outlined text-[13px] block">arrow_downward</span>
+                        <BitableIcon name="arrow_downward" className="text-[13px] block" />
                       </button>
                       {/* Delete */}
                       <button
@@ -207,7 +207,7 @@ export const BitableGroupPopover = <T,>({
                         className="p-0.5 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer ml-1"
                         title="移除此条件"
                       >
-                        <span className="material-symbols-outlined text-[14px] block">close</span>
+                        <BitableIcon name="close" className="text-[14px] block" />
                       </button>
                     </div>
                   </div>
@@ -227,9 +227,10 @@ export const BitableGroupPopover = <T,>({
                           </option>
                         ))}
                       </select>
-                      <span className="material-symbols-outlined text-[13px] text-slate-400 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none">
-                        unfold_more
-                      </span>
+                      <BitableIcon
+                        name="unfold_more"
+                        className="text-[13px] text-slate-400 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                      />
                     </div>
 
                     {/* Direction toggle */}
@@ -239,9 +240,10 @@ export const BitableGroupPopover = <T,>({
                       className="h-7 px-2 rounded border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 flex items-center gap-1 cursor-pointer shrink-0 text-[11.5px] font-medium transition-colors"
                       title={dir === 'asc' ? '当前：升序 (A → Z, 1 → 9)' : '当前：降序 (Z → A, 9 → 1)'}
                     >
-                      <span className="material-symbols-outlined text-[13px] text-slate-500">
-                        {dir === 'asc' ? 'arrow_upward' : 'arrow_downward'}
-                      </span>
+                      <BitableIcon
+                        name={dir === 'asc' ? 'arrow_upward' : 'arrow_downward'}
+                        className="text-[13px] text-slate-500"
+                      />
                       <span>{dir === 'asc' ? '升序' : '降序'}</span>
                     </button>
                   </div>
@@ -263,7 +265,7 @@ export const BitableGroupPopover = <T,>({
                 : 'cursor-pointer hover:border-[#005BAC] hover:text-[#005BAC]'
             }`}
           >
-            <span className="material-symbols-outlined text-[15px]">add</span>
+            <BitableIcon name="add" className="text-[15px]" />
             <span>添加分组条件</span>
           </button>
 

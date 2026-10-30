@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { BitableColumnConfig, BitableViewConfig } from './types';
 import { buildCardModel, formatTag } from './cardModel';
+import { BitableIcon } from './BitableIcon';
 
 interface BitableKanbanViewProps<T extends { id: string }> {
   items: T[];
@@ -283,9 +284,7 @@ export const BitableKanbanView = <T extends { id: string }>({
                           <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[10.5px] text-slate-400 gap-2">
                             {card.person ? (
                               <div className="flex items-center gap-1 text-slate-600 min-w-0">
-                                <span className="material-symbols-outlined text-[13px] text-slate-400">
-                                  person
-                                </span>
+                                <BitableIcon name="person" className="text-[13px] text-slate-400" />
                                 <span className="truncate" title={card.person.label}>
                                   {card.person.text}
                                 </span>

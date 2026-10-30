@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { BitableColumnConfig, BitableColorRule } from './types';
+import { BitableIcon } from './BitableIcon';
 
 interface BitableColorRulePopoverProps<T> {
   columns: BitableColumnConfig<T>[];
@@ -182,7 +183,7 @@ export const BitableColorRulePopover = <T,>({
       {/* Header */}
       <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
         <div className="flex items-center gap-2 font-semibold text-slate-900">
-          <span className="material-symbols-outlined text-[17px] text-[#005BAC]">palette</span>
+          <BitableIcon name="palette" className="text-[17px] text-[#005BAC]" />
           <span className="text-[13px] font-bold">条件格式与填色面板</span>
           {colorRules.length > 0 && (
             <span className="text-[11px] font-normal px-2 py-0.2 rounded-full bg-blue-50 text-[#005BAC] border border-blue-200">
@@ -205,7 +206,7 @@ export const BitableColorRulePopover = <T,>({
             type="button"
             className="text-slate-400 hover:text-slate-600 rounded p-1 hover:bg-slate-100 cursor-pointer transition-colors"
           >
-            <span className="material-symbols-outlined text-[16px] block">close</span>
+            <BitableIcon name="close" className="text-[16px] block" />
           </button>
         </div>
       </div>
@@ -218,7 +219,7 @@ export const BitableColorRulePopover = <T,>({
       <div className="py-1 space-y-2.5 max-h-[62vh] overflow-y-auto overflow-x-hidden pr-1">
         {colorRules.length === 0 ? (
           <div className="text-center py-8 text-slate-400 text-[12px] bg-slate-50 rounded-lg border border-dashed border-slate-200 space-y-2">
-            <span className="material-symbols-outlined text-[32px] text-slate-300 block">format_color_fill</span>
+            <BitableIcon name="format_color_fill" className="text-[32px] text-slate-300 block mx-auto" />
             <div className="font-medium text-slate-600">暂无生效的填色规则</div>
             <div className="text-[11px] text-slate-400">点击下方按钮可针对版本、性质、图号等任意字段添加高亮着色</div>
           </div>
@@ -293,7 +294,7 @@ export const BitableColorRulePopover = <T,>({
                     className="p-1 text-slate-400 hover:text-red-500 rounded hover:bg-red-50 cursor-pointer shrink-0 transition-colors"
                     title="删除此规则"
                   >
-                    <span className="material-symbols-outlined text-[16px] block">delete</span>
+                    <BitableIcon name="delete" className="text-[16px] block" />
                   </button>
                 </div>
 
@@ -366,12 +367,11 @@ export const BitableColorRulePopover = <T,>({
                                 }`}
                               >
                                 {isChipSelected ? (
-                                  <span
-                                    className="material-symbols-outlined text-[15px] font-bold"
+                                  <BitableIcon
+                                    name="check"
+                                    className="text-[15px] font-bold"
                                     style={{ color: chip.text }}
-                                  >
-                                    check
-                                  </span>
+                                  />
                                 ) : (
                                   <span
                                     className="text-[9px] font-medium opacity-0 group-hover:opacity-100 transition-opacity truncate px-0.5"
@@ -418,9 +418,7 @@ export const BitableColorRulePopover = <T,>({
                               >
                                 <span className="truncate">{swatch.label}</span>
                                 {isSwatchSelected && (
-                                  <span className="material-symbols-outlined text-[13px] ml-1">
-                                    check
-                                  </span>
+                                  <BitableIcon name="check" className="text-[13px] ml-1 shrink-0" />
                                 )}
                               </button>
                             );
@@ -498,7 +496,7 @@ export const BitableColorRulePopover = <T,>({
                           }}
                         >
                           <div className="flex items-center gap-2">
-                            <span className="material-symbols-outlined text-[16px]">visibility</span>
+                            <BitableIcon name="visibility" className="text-[16px]" />
                             <span className="font-bold text-[12px]">
                               单元格渲染预览效果：Draft · 重点版本标注
                             </span>
@@ -523,7 +521,7 @@ export const BitableColorRulePopover = <T,>({
           onClick={handleAddRule}
           className="h-7 px-3 flex items-center gap-1.5 rounded border border-slate-200 hover:bg-slate-50 text-slate-700 text-[11.5px] font-medium cursor-pointer transition-colors shadow-2xs"
         >
-          <span className="material-symbols-outlined text-[15px] text-[#005BAC]">add</span>
+          <BitableIcon name="add" className="text-[15px] text-[#005BAC]" />
           <span>添加填色规则</span>
         </button>
 

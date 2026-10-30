@@ -13,13 +13,71 @@ export type BitableFieldType =
   | 'user'
   | 'group'
   | 'attachment'
-  | 'action';
+  | 'action'
+  | 'progress'
+  | 'rating'
+  | 'currency'
+  | 'email'
+  | 'phone'
+  | 'createdTime'
+  | 'updatedTime'
+  | 'createdBy'
+  | 'updatedBy'
+  | 'autoNumber'
+  | 'link'
+  | 'lookup';
+
+export interface BitableUser {
+  id: string;
+  name: string;
+  avatar?: string;
+  email?: string;
+}
+
+export interface BitableLinkConfig {
+  /** 关联的目标数据表 ID */
+  targetTableId: string;
+  /** 目标表中用来作为展示主标题的字段 ID（缺省时自动使用目标表首个可见文本列） */
+  targetFieldId?: string;
+  /** 是否允许多选关联记录，默认 true */
+  multiple?: boolean;
+}
+
+export interface BitableLookupConfig {
+  /** 本表中所依赖的关联字段 ID */
+  linkFieldId: string;
+  /** 目标表中要抓取/投影的字段 ID */
+  targetFieldId: string;
+  /** 目标数据表 ID（可选，缺省时自动从 linkFieldId 字段的 linkConfig 推导） */
+  targetTableId?: string;
+}
+
+/** 跨表关联数据解析器函数签名 */
+export type BitableLinkedTableAccessor = (targetTableId: string) => {
+  id?: string;
+  label?: string;
+  columns: BitableColumnConfig<any>[];
+  data: any[];
+} | undefined;
+
+export function isSystemFieldType(type: BitableFieldType): boolean {
+  return (
+    type === 'createdTime' ||
+    type === 'updatedTime' ||
+    type === 'createdBy' ||
+    type === 'updatedBy' ||
+    type === 'autoNumber'
+  );
+}
+
+export function isRelationalFieldType(type: BitableFieldType): boolean {
+  return type === 'link' || type === 'lookup';
+}
 
 /**
  * 字段类型元数据。label 为 UI 展示名，key 为持久化标识——**只改 label，不要改 key**。
  *
- * 顺序对齐飞书多维表的「常规」分组（本平台暂不提供「公式」与「查找引用」：
- * 两者都需要后端解析引擎，纯前端 SPA 无法真实求值，只能做假数据，故不引入）。
+ * 顺序对齐飞书多维表的「常规」与「高级/系统」分组。
  * `badge` / `action` 是本平台扩展：前者用于彩色状态徽标，后者是后台程序参与计算匹配的只读列。
  */
 export const BITABLE_FIELD_TYPE_META: Record<
@@ -27,13 +85,25 @@ export const BITABLE_FIELD_TYPE_META: Record<
   { label: string; icon: string; desc: string; color: string }
 > = {
   text: { label: '文本', icon: 'short_text', desc: '常规文本输入与显示', color: 'text-blue-600 bg-blue-50 border-blue-200' },
+  number: { label: '数字', icon: 'pin', desc: '数值、工程量、尺寸', color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
   select: { label: '单选', icon: 'radio_button_checked', desc: '预设候选项，单选枚举', color: 'text-purple-600 bg-purple-50 border-purple-200' },
   multiSelect: { label: '多选', icon: 'checklist', desc: '预设候选项，可多值叠加', color: 'text-violet-600 bg-violet-50 border-violet-200' },
+  date: { label: '日期', icon: 'calendar_today', desc: '年月日日期选择', color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
+  progress: { label: '进度', icon: 'percent', desc: '0-100% 进度条或完成率', color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
+  rating: { label: '评分', icon: 'star', desc: '1-5 星级评分', color: 'text-amber-600 bg-amber-50 border-amber-200' },
+  currency: { label: '货币', icon: 'payments', desc: '金额与货币记账', color: 'text-rose-600 bg-rose-50 border-rose-200' },
+  email: { label: '邮箱', icon: 'mail', desc: '电子邮箱地址，支持一键唤起邮件', color: 'text-blue-600 bg-blue-50 border-blue-200' },
+  phone: { label: '电话', icon: 'phone', desc: '手机或电话号码，支持一键唤起拨号', color: 'text-teal-600 bg-teal-50 border-teal-200' },
+  createdTime: { label: '创建时间', icon: 'schedule', desc: '记录被创建时系统自动打点的时间', color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
+  updatedTime: { label: '修改时间', icon: 'update', desc: '记录最后一次变更时的更新时间', color: 'text-blue-600 bg-blue-50 border-blue-200' },
+  createdBy: { label: '创建人', icon: 'person_add', desc: '新建该记录的操作者', color: 'text-teal-600 bg-teal-50 border-teal-200' },
+  updatedBy: { label: '修改人', icon: 'manage_accounts', desc: '最后修改该记录的操作者', color: 'text-cyan-600 bg-cyan-50 border-cyan-200' },
+  autoNumber: { label: '自动编号', icon: 'tag', desc: '系统自动生成的唯一递增流水序号', color: 'text-amber-600 bg-amber-50 border-amber-200' },
+  link: { label: '关联记录', icon: 'link', desc: '关联其他数据表中的一条或多条记录', color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
+  lookup: { label: '查找引用', icon: 'search', desc: '跨表引用关联记录中的指定字段', color: 'text-sky-600 bg-sky-50 border-sky-200' },
   user: { label: '人员', icon: 'person', desc: '责任人 / 参与人，可多人', color: 'text-teal-600 bg-teal-50 border-teal-200' },
   group: { label: '群组', icon: 'groups', desc: '部门 / 协作群组', color: 'text-orange-600 bg-orange-50 border-orange-200' },
-  date: { label: '日期', icon: 'calendar_today', desc: '年月日日期选择', color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
   attachment: { label: '附件', icon: 'attach_file', desc: 'PDF / 图片等附件文件', color: 'text-rose-600 bg-rose-50 border-rose-200' },
-  number: { label: '数字', icon: 'pin', desc: '数值、工程量、尺寸', color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
   boolean: { label: '复选框', icon: 'check_box', desc: '是/否、完成/未完成', color: 'text-amber-600 bg-amber-50 border-amber-200' },
   url: { label: '超链接', icon: 'link', desc: '网址 / 云盘 / 二维码链接', color: 'text-sky-600 bg-sky-50 border-sky-200' },
   badge: { label: '状态标签', icon: 'label', desc: '彩色胶囊状态徽标', color: 'text-cyan-600 bg-cyan-50 border-cyan-200' },
@@ -65,6 +135,11 @@ export interface BitableColumnConfig<T = any> {
   isFrozen?: boolean; // 是否冻结列（固定在表格左侧，横向滚动时不移出可视区）
   required?: boolean;
   options?: BitableSelectOption[]; // select 类型的备选值
+  currencySymbol?: string; // 货币字段符号，默认 '¥'
+  maxRating?: number; // 评分字段最大星级，默认 5
+  autoNumberConfig?: { prefix?: string; digits?: number; startNumber?: number }; // 自动编号配置
+  linkConfig?: BitableLinkConfig; // 关联记录配置
+  lookupConfig?: BitableLookupConfig; // 查找引用配置
   sortable?: boolean;
   filterable?: boolean;
   groupable?: boolean;
@@ -111,6 +186,7 @@ export interface BitableSortRule {
 }
 
 export type BitableViewType = 'grid' | 'kanban' | 'gallery' | 'gantt' | 'calendar' | 'form';
+export type BitableGanttScale = 'day' | 'week' | 'month';
 
 export type BitableViewScope = 'collaborative' | 'personal';
 
@@ -178,6 +254,9 @@ export interface BitableViewConfig {
   ganttStageFieldId?: string | null;
   ganttStartFieldId?: string | null; // 甘特：开始日期字段（未设置时按字段名自动识别）
   ganttEndFieldId?: string | null; // 甘特：结束日期字段（未设置时按字段名自动识别）
+  ganttDependencyFieldId?: string | null; // 甘特：前驱依赖字段（前置任务编码或数组）
+  ganttShowDependencies?: boolean; // 甘特：是否展示任务依赖连线（默认 true）
+  ganttScale?: BitableGanttScale; // 甘特：时间缩放刻度（'day' | 'week' | 'month'，默认 'day'）
   calendarDateFieldId?: string | null; // 日历：日期字段（默认 updatedAt/date/timestamp）
   formSubmitText?: string; // 表单：提交按钮文案
   formFields?: string[]; // 表单：展示字段（空=全部可见字段）

@@ -49,7 +49,9 @@ export interface BitableSummaryResult {
 
 /** 某字段类型下可选的汇总方式 */
 export function summaryOptionsFor(type: BitableFieldType): BitableSummaryType[] {
-  if (type === 'number') return ['none', 'sum', 'avg', 'max', 'min', 'count'];
+  if (type === 'number' || type === 'currency' || type === 'progress' || type === 'rating') {
+    return ['none', 'sum', 'avg', 'max', 'min', 'count'];
+  }
   if (type === 'date') return ['none', 'max', 'min', 'count'];
   return ['none', 'count'];
 }
@@ -68,7 +70,10 @@ export function resolveSummaryType(
   if (explicit !== undefined) {
     return summaryOptionsFor(column.type).includes(explicit) ? explicit : 'none';
   }
-  if (autoSum && column.type === 'number') return 'sum';
+  if (autoSum) {
+    if (column.type === 'number' || column.type === 'currency') return 'sum';
+    if (column.type === 'progress' || column.type === 'rating') return 'avg';
+  }
   return 'none';
 }
 
@@ -155,7 +160,13 @@ export function computeSummary(
     if (count === 0) continue;
 
     const value = type === 'sum' ? total : type === 'avg' ? total / count : type === 'max' ? max : min;
-    cells[col.id] = { fieldId: col.id, type, value, text: formatNumber(value) };
+    let formattedText = formatNumber(value);
+    if (col.type === 'progress') {
+      formattedText = `${formatNumber(value)}%`;
+    } else if (col.type === 'currency') {
+      formattedText = `¥ ${formatNumber(value)}`;
+    }
+    cells[col.id] = { fieldId: col.id, type, value, text: formattedText };
   }
 
   return { count: items.length, cells };

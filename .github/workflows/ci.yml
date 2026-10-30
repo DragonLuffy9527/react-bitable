@@ -17,5 +17,6 @@ jobs:
           cache: npm
       - run: npm install --include=dev
       - run: npm run typecheck
+      - run: npm run test
       - run: npm run build
       - run: npm run build:demo

@@ -130,6 +130,27 @@ export type {
   CreateSchemaSaverOptions
 } from './schema';
 
+// —— 系统审计与自动字段（纯函数） ——
+export {
+  formatDateTime,
+  formatUserLabel,
+  generateNextAutoNumber,
+  applySystemFieldsOnCreate,
+  applySystemFieldsOnUpdate
+} from './systemFields';
+
+// —— 表间关联与查找引用（纯函数与弹层组件） ——
+export {
+  resolveLinkedRecordIds,
+  getLinkedRecords,
+  formatLinkedRecordDisplay,
+  computeLookupValue,
+  computeRowLookups,
+  applyLookupsToRows
+} from './relations';
+export { BitableLinkPopover } from './BitableLinkPopover';
+export type { BitableLinkPopoverProps } from './BitableLinkPopover';
+
 // —— 主视图容器（内部按 viewType 分发到 6 种视图） ——
 export { BitableTable } from './BitableTable';
 
@@ -146,6 +167,12 @@ export { BitableToolbar } from './BitableToolbar';
 
 // —— 单元格编辑器 ——
 export { EditableCell } from './EditableCell';
+
+// —— 离线内置图标 ——
+export { BitableIcon } from './BitableIcon';
+export type { BitableIconProps } from './BitableIcon';
+export { ICONS } from './icons';
+export type { BitableIconName } from './icons';
 
 // —— 导入：Excel / CSV → 多维表 ——
 export { BitableImportDialog } from './BitableImportDialog';
@@ -174,6 +201,8 @@ export type {
 } from './spreadsheet';
 
 // —— 配置弹层 ——
+export { BitableAddRecordPopover } from './BitableAddRecordPopover';
+export type { BitableAddRecordPopoverProps } from './BitableAddRecordPopover';
 export { BitableFieldConfigPopover } from './BitableFieldConfigPopover';
 export { BitableFilterPopover } from './BitableFilterPopover';
 export { BitableSortPopover } from './BitableSortPopover';
@@ -181,3 +210,39 @@ export { BitableGroupPopover } from './BitableGroupPopover';
 export { BitableColorRulePopover, businessColorSwatches, colorMatrixPalette } from './BitableColorRulePopover';
 export { BitableDensityPopover } from './BitableDensityPopover';
 export { BitableViewConfigPopover } from './BitableViewConfigPopover';
+
+// —— 多表容器（workspace） ——
+export { BitableWorkspaceSidebar } from './BitableWorkspaceSidebar';
+export type { BitableWorkspaceSidebarProps } from './BitableWorkspaceSidebar';
+export { useBitableWorkspace, createDefaultTableContent } from './useBitableWorkspace';
+export type { UseBitableWorkspaceOptions, UseBitableWorkspaceResult } from './useBitableWorkspace';
+export {
+  resolveTableRegistry,
+  resolveActiveTableId,
+  createTableId,
+  tableStorageKey,
+  serializeTableDef,
+  deserializeTableDef,
+  normalizeSnapshot,
+  setActiveTable,
+  renameTable,
+  addTable,
+  removeTable,
+  moveTable,
+  EMPTY_WORKSPACE_SNAPSHOT,
+  createFolderId,
+  addFolder,
+  renameFolder,
+  removeFolder,
+  toggleFolderCollapsed,
+  moveTableToFolder,
+  moveFolderToFolder,
+  reorderWorkspaceItems,
+  isFolderDescendant
+} from './workspace';
+export type {
+  BitableTableDef,
+  SerializedTableDef,
+  BitableWorkspaceSnapshot,
+  BitableWorkspaceFolder
+} from './workspace';

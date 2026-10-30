@@ -5,6 +5,7 @@ import {
   BitableSelectOption,
   BITABLE_FIELD_TYPE_META
 } from './types';
+import { BitableIcon } from './BitableIcon';
 
 interface BitableFieldConfigPopoverProps<T> {
   columns: BitableColumnConfig<T>[];
@@ -139,6 +140,16 @@ export const BitableFieldConfigPopover = <T,>({
         ? '100px'
         : newFieldType === 'boolean'
         ? '96px'
+        : newFieldType === 'progress'
+        ? '140px'
+        : newFieldType === 'rating'
+        ? '130px'
+        : newFieldType === 'currency'
+        ? '120px'
+        : newFieldType === 'email'
+        ? '180px'
+        : newFieldType === 'phone'
+        ? '140px'
         : newFieldType === 'multiSelect'
         ? '168px'
         : newFieldType === 'user' || newFieldType === 'group'
@@ -184,13 +195,18 @@ export const BitableFieldConfigPopover = <T,>({
    */
   const availableFieldTypes: BitableFieldType[] = [
     'text',
+    'number',
     'select',
     'multiSelect',
+    'date',
+    'progress',
+    'rating',
+    'currency',
+    'email',
+    'phone',
     'user',
     'group',
-    'date',
     'attachment',
-    'number',
     'boolean',
     'url',
     'badge'
@@ -202,7 +218,7 @@ export const BitableFieldConfigPopover = <T,>({
       <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded-md bg-blue-50 text-[#005BAC] flex items-center justify-center font-bold">
-            <span className="material-symbols-outlined text-[16px]">tune</span>
+            <BitableIcon name="tune" className="text-[16px]" />
           </div>
           <div>
             <div className="flex items-center gap-1.5 font-bold text-slate-900 text-[13px]">
@@ -219,16 +235,14 @@ export const BitableFieldConfigPopover = <T,>({
           className="text-slate-400 hover:text-slate-600 rounded p-1 hover:bg-slate-100 cursor-pointer transition-colors"
           title="关闭"
         >
-          <span className="material-symbols-outlined text-[16px] block">close</span>
+          <BitableIcon name="close" className="text-[16px] block" />
         </button>
       </div>
 
       {/* Feature Guide Banner */}
       <div className="mt-2.5 px-3 py-1.5 rounded-lg bg-amber-50/70 border border-amber-200/80 text-amber-900 flex items-center justify-between text-[11px]">
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="material-symbols-outlined text-[15px] text-amber-700 shrink-0">
-            security
-          </span>
+          <BitableIcon name="security" className="text-[15px] text-amber-700 shrink-0" />
           <span className="text-[11px] text-amber-900 truncate">
             <strong>操作提示：</strong>点击 <span className="font-semibold text-amber-800">🔒</span> 切换锁定保护，点击 <span className="font-semibold text-[#005BAC]">📌</span> 冻结固定，点击 <span className="font-semibold text-slate-700">✎</span> 重命名，点击 <span className="font-semibold text-rose-600">🗑️</span> 删除
           </span>
@@ -238,9 +252,10 @@ export const BitableFieldConfigPopover = <T,>({
       {/* Search & Batch Actions */}
       <div className="py-2 flex items-center justify-between gap-2">
         <div className="relative flex-1">
-          <span className="material-symbols-outlined text-[15px] text-slate-400 absolute left-2 top-1.5 pointer-events-none">
-            search
-          </span>
+          <BitableIcon
+            name="search"
+            className="text-[15px] text-slate-400 absolute left-2 top-1.5 pointer-events-none"
+          />
           <input
             type="text"
             value={searchQuery}
@@ -253,7 +268,7 @@ export const BitableFieldConfigPopover = <T,>({
               onClick={() => setSearchQuery('')}
               className="absolute right-1.5 top-1.5 text-slate-400 hover:text-slate-600 cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[14px]">cancel</span>
+              <BitableIcon name="cancel" className="text-[14px]" />
             </button>
           )}
         </div>
@@ -366,7 +381,7 @@ export const BitableFieldConfigPopover = <T,>({
                       className="w-6 h-6 rounded text-emerald-600 hover:bg-emerald-50 cursor-pointer flex items-center justify-center transition-colors"
                       title="保存名称"
                     >
-                      <span className="material-symbols-outlined text-[14px]">check</span>
+                      <BitableIcon name="check" className="text-[14px]" />
                     </button>
                     <button
                       type="button"
@@ -374,7 +389,7 @@ export const BitableFieldConfigPopover = <T,>({
                       className="w-6 h-6 rounded text-slate-400 hover:text-slate-600 cursor-pointer flex items-center justify-center transition-colors"
                       title="取消"
                     >
-                      <span className="material-symbols-outlined text-[14px]">close</span>
+                      <BitableIcon name="close" className="text-[14px]" />
                     </button>
                   </div>
                 ) : (
@@ -435,15 +450,17 @@ export const BitableFieldConfigPopover = <T,>({
                               }
                             >
                               <div className="flex items-center gap-1 min-w-0 truncate">
-                                <span className="material-symbols-outlined text-[13px] leading-none text-slate-500 shrink-0">
-                                  {typeMeta.icon}
-                                </span>
+                                <BitableIcon
+                                  name={typeMeta.icon as any}
+                                  className="text-[13px] leading-none text-slate-500 shrink-0"
+                                />
                                 <span className="truncate">{typeMeta.label}</span>
                               </div>
                               {!isTypeLocked && (
-                                <span className="material-symbols-outlined text-[12px] leading-none text-slate-400 shrink-0">
-                                  expand_more
-                                </span>
+                                <BitableIcon
+                                  name="expand_more"
+                                  className="text-[12px] leading-none text-slate-400 shrink-0"
+                                />
                               )}
                             </div>
 
@@ -493,7 +510,7 @@ export const BitableFieldConfigPopover = <T,>({
                               }`}
                               title={isTypeLocked ? '字段已锁定，不可编辑选项' : '配置候选项列表（单选 / 多选通用）'}
                             >
-                              <span className="material-symbols-outlined text-[13px]">tune</span>
+                              <BitableIcon name="tune" className="text-[13px]" />
                             </button>
                           )}
                         </>
@@ -502,7 +519,7 @@ export const BitableFieldConfigPopover = <T,>({
                           className="w-full h-6 rounded flex items-center justify-center gap-1 text-[11px] font-medium text-slate-500 bg-slate-100 border border-slate-200 cursor-help"
                           title="后台字段：由后台程序参与计算与匹配（附件解析、图纸关联、操作入口），类型由程序决定，前端不可修改"
                         >
-                          <span className="material-symbols-outlined text-[12px] leading-none shrink-0">dns</span>
+                          <BitableIcon name="dns" className="text-[12px] leading-none shrink-0" />
                           <span className="truncate">后台字段</span>
                         </span>
                       )}
@@ -538,9 +555,10 @@ export const BitableFieldConfigPopover = <T,>({
                                 : '当前【未锁定】（允许行内编辑与修改）。点击锁定保护此字段'
                             }
                           >
-                            <span className={`material-symbols-outlined text-[13px] leading-none ${isLockProtected ? 'text-red-700 font-bold' : isHardLocked ? 'text-amber-700 font-bold' : 'text-slate-400'}`}>
-                              {isHardLocked ? 'lock' : 'lock_open'}
-                            </span>
+                            <BitableIcon
+                              name={isHardLocked ? 'lock' : 'lock_open'}
+                              className={`text-[13px] leading-none ${isLockProtected ? 'text-red-700 font-bold' : isHardLocked ? 'text-amber-700 font-bold' : 'text-slate-400'}`}
+                            />
                           </button>
                         ) : (
                           <div className="w-6 h-6" />
@@ -563,9 +581,7 @@ export const BitableFieldConfigPopover = <T,>({
                             }`}
                             title={col.isFrozen ? '已冻结固定在左侧。点击取消冻结' : '冻结固定在左侧（横向滚动时不移出可视区）'}
                           >
-                            <span className="material-symbols-outlined text-[13px] leading-none">
-                              push_pin
-                            </span>
+                            <BitableIcon name="push_pin" className="text-[13px] leading-none" />
                           </button>
                         ) : (
                           <div className="w-6 h-6" />
@@ -580,7 +596,7 @@ export const BitableFieldConfigPopover = <T,>({
                               className="w-6 h-6 rounded flex items-center justify-center text-slate-300 cursor-not-allowed shrink-0"
                               title="字段已锁定，不可修改名称（点击左侧锁图标可解锁）"
                             >
-                              <span className="material-symbols-outlined text-[13px]">edit</span>
+                              <BitableIcon name="edit" className="text-[13px]" />
                             </div>
                           ) : (
                             <button
@@ -589,7 +605,7 @@ export const BitableFieldConfigPopover = <T,>({
                               className="w-6 h-6 rounded text-slate-400 hover:text-[#005BAC] hover:bg-blue-50 transition-all cursor-pointer flex items-center justify-center shrink-0"
                               title={isPrimary ? '修改字段名称（主键可改名，但不可删除）' : '修改字段名称'}
                             >
-                              <span className="material-symbols-outlined text-[13px]">edit</span>
+                              <BitableIcon name="edit" className="text-[13px]" />
                             </button>
                           )
                         ) : (
@@ -597,7 +613,7 @@ export const BitableFieldConfigPopover = <T,>({
                             className="w-6 h-6 rounded flex items-center justify-center text-slate-200 cursor-not-allowed shrink-0"
                             title="当前页面未提供字段改名能力"
                           >
-                            <span className="material-symbols-outlined text-[13px]">edit</span>
+                            <BitableIcon name="edit" className="text-[13px]" />
                           </div>
                         )}
                       </div>
@@ -610,7 +626,7 @@ export const BitableFieldConfigPopover = <T,>({
                               className="w-6 h-6 rounded flex items-center justify-center text-slate-300 cursor-not-allowed shrink-0"
                               title="字段已锁定，不可删除，请先解锁"
                             >
-                              <span className="material-symbols-outlined text-[13px]">delete</span>
+                              <BitableIcon name="delete" className="text-[13px]" />
                             </div>
                           ) : (
                             <button
@@ -622,7 +638,7 @@ export const BitableFieldConfigPopover = <T,>({
                               className="w-6 h-6 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer flex items-center justify-center transition-colors shrink-0"
                               title="删除此字段"
                             >
-                              <span className="material-symbols-outlined text-[13px]">delete</span>
+                              <BitableIcon name="delete" className="text-[13px]" />
                             </button>
                           )
                         ) : (
@@ -630,7 +646,7 @@ export const BitableFieldConfigPopover = <T,>({
                             className="w-6 h-6 rounded flex items-center justify-center text-slate-200 cursor-not-allowed shrink-0"
                             title={isAction ? '后台字段不可删除（后台程序依赖此列做计算与匹配）' : '系统核心主键不可删除'}
                           >
-                            <span className="material-symbols-outlined text-[13px]">delete</span>
+                            <BitableIcon name="delete" className="text-[13px]" />
                           </div>
                         )}
                       </div>
@@ -644,7 +660,7 @@ export const BitableFieldConfigPopover = <T,>({
                           className="w-5 h-6 rounded text-slate-400 hover:text-slate-700 disabled:opacity-20 cursor-pointer flex items-center justify-center transition-colors"
                           title="上移"
                         >
-                          <span className="material-symbols-outlined text-[13px]">arrow_upward</span>
+                          <BitableIcon name="arrow_upward" className="text-[13px]" />
                         </button>
                         <button
                           type="button"
@@ -653,7 +669,7 @@ export const BitableFieldConfigPopover = <T,>({
                           className="w-5 h-6 rounded text-slate-400 hover:text-slate-700 disabled:opacity-20 cursor-pointer flex items-center justify-center transition-colors"
                           title="下移"
                         >
-                          <span className="material-symbols-outlined text-[13px]">arrow_downward</span>
+                          <BitableIcon name="arrow_downward" className="text-[13px]" />
                         </button>
                       </div>
                     </div>
@@ -670,14 +686,14 @@ export const BitableFieldConfigPopover = <T,>({
         <div className="mt-2 p-2.5 bg-blue-50/60 rounded-lg border border-blue-200 animate-in fade-in duration-100">
           <div className="flex items-center justify-between pb-1 text-[11.5px] font-semibold text-[#005BAC]">
             <span className="flex items-center gap-1">
-              <span className="material-symbols-outlined text-[14px]">tune</span>
+              <BitableIcon name="tune" className="text-[14px]" />
               配置下拉选项
             </span>
             <button
               onClick={() => setOptionsEditingColId(null)}
               className="text-slate-400 hover:text-slate-600"
             >
-              <span className="material-symbols-outlined text-[13px]">close</span>
+              <BitableIcon name="close" className="text-[13px]" />
             </button>
           </div>
           <div className="text-[10.5px] text-slate-500 mb-1.5">用逗号或换行分隔候选项：</div>
@@ -733,7 +749,7 @@ export const BitableFieldConfigPopover = <T,>({
               }}
               className="flex-1 h-7.5 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-[#005BAC]/40 bg-blue-50/30 text-[#005BAC] hover:bg-blue-50 hover:border-[#005BAC] text-[11.5px] font-medium transition-all cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[15px]">add_circle</span>
+              <BitableIcon name="add_circle" className="text-[15px]" />
               <span>新建字段</span>
             </button>
 
@@ -748,7 +764,7 @@ export const BitableFieldConfigPopover = <T,>({
                 className="h-7.5 px-2.5 flex items-center gap-1 rounded-lg border border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50 text-[11px] cursor-pointer transition-colors shrink-0"
                 title="恢复所有默认列并清空自定义字段"
               >
-                <span className="material-symbols-outlined text-[13px]">restart_alt</span>
+                <BitableIcon name="restart_alt" className="text-[13px]" />
                 <span>恢复默认</span>
               </button>
             )}
@@ -760,7 +776,7 @@ export const BitableFieldConfigPopover = <T,>({
           >
             <div className="flex items-center justify-between">
               <span className="font-bold text-slate-900 text-[11.5px] flex items-center gap-1">
-                <span className="material-symbols-outlined text-[15px] text-[#005BAC]">add_box</span>
+                <BitableIcon name="add_box" className="text-[15px] text-[#005BAC]" />
                 新建自定义字段
               </span>
               <button
@@ -768,7 +784,7 @@ export const BitableFieldConfigPopover = <T,>({
                 onClick={() => setShowAddForm(false)}
                 className="text-slate-400 hover:text-slate-600"
               >
-                <span className="material-symbols-outlined text-[14px]">close</span>
+                <BitableIcon name="close" className="text-[14px]" />
               </button>
             </div>
 
@@ -795,16 +811,18 @@ export const BitableFieldConfigPopover = <T,>({
               <div className="relative">
                 <div className="h-7 px-2 flex items-center justify-between text-[11px] font-medium bg-white border border-slate-200 rounded-md pointer-events-none">
                   <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="material-symbols-outlined text-[14px] leading-none text-[#005BAC] shrink-0">
-                      {BITABLE_FIELD_TYPE_META[newFieldType].icon}
-                    </span>
+                    <BitableIcon
+                      name={BITABLE_FIELD_TYPE_META[newFieldType].icon as any}
+                      className="text-[14px] leading-none text-[#005BAC] shrink-0"
+                    />
                     <span className="truncate text-slate-800">
                       {BITABLE_FIELD_TYPE_META[newFieldType].label}
                     </span>
                   </div>
-                  <span className="material-symbols-outlined text-[13px] leading-none text-slate-400 shrink-0">
-                    expand_more
-                  </span>
+                  <BitableIcon
+                    name="expand_more"
+                    className="text-[13px] leading-none text-slate-400 shrink-0"
+                  />
                 </div>
                 {/* 透明原生 select 覆盖：与行内「类型与选项」同款，跨容器渲染最稳 */}
                 <select
@@ -851,9 +869,10 @@ export const BitableFieldConfigPopover = <T,>({
             {/* Lock Field Switch */}
             <div className="flex items-center justify-between py-1 px-1 bg-white rounded-lg border border-slate-200">
               <div className="flex items-center gap-1.5">
-                <span className={`material-symbols-outlined text-[15px] ${newFieldIsLocked ? 'text-amber-600' : 'text-slate-400'}`}>
-                  {newFieldIsLocked ? 'lock' : 'lock_open'}
-                </span>
+                <BitableIcon
+                  name={newFieldIsLocked ? 'lock' : 'lock_open'}
+                  className={`text-[15px] ${newFieldIsLocked ? 'text-amber-600' : 'text-slate-400'}`}
+                />
                 <span className="text-[11px] text-slate-700">创建后立即锁定保护 (受控只读)</span>
               </div>
               <input

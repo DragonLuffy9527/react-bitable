@@ -62,10 +62,22 @@ export function coercePastedValue(type: BitableFieldType, raw: string): unknown 
   if (text === '') return '';
 
   switch (type) {
-    case 'number': {
+    case 'number':
+    case 'currency': {
       const n = parseNumberText(text);
       return n === null ? text : n;
     }
+    case 'progress': {
+      const n = parseNumberText(text);
+      return n === null ? text : Math.min(100, Math.max(0, n));
+    }
+    case 'rating': {
+      const n = parseNumberText(text);
+      return n === null ? text : Math.min(5, Math.max(0, Math.round(n)));
+    }
+    case 'email':
+    case 'phone':
+      return text.trim();
     case 'boolean': {
       const b = parseBooleanText(text);
       return b === null ? text : b;

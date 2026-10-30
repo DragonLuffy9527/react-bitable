@@ -1,5 +1,12 @@
 import { BitableColumnConfig, BitableFieldType } from './types';
-import { toValueList, resolveOptionList, displayUrl } from './cellValue';
+import {
+  toValueList,
+  resolveOptionList,
+  displayUrl,
+  formatCurrency,
+  formatProgress,
+  parseRating
+} from './cellValue';
 
 /**
  * 卡片类视图（看板 / 画册 / 甘特）的字段解析器。
@@ -55,6 +62,19 @@ export function getFieldText<T>(col: BitableColumnConfig<T>, item: T): string {
 
   // 超链接：卡片上没有跳转交互，去掉协议头更好读
   if (col.type === 'url') return displayUrl(String(raw));
+
+  // 货币金额：带符号与千分位
+  if (col.type === 'currency') return formatCurrency(raw, col.currencySymbol || '¥');
+
+  // 进度条：带百分比
+  if (col.type === 'progress') return formatProgress(raw).text;
+
+  // 评分：星级表示
+  if (col.type === 'rating') {
+    const stars = parseRating(raw, col.maxRating || 5);
+    const max = col.maxRating || 5;
+    return '★'.repeat(stars) + '☆'.repeat(Math.max(0, max - stars));
+  }
 
   // 人员 / 群组：数组统一用顿号连接
   if (Array.isArray(raw)) return toValueList(raw).join('、');

@@ -5,7 +5,8 @@ import {
   BitableDensity,
   BitableViewType,
   BitableViewConfig,
-  BitableGroupSection
+  BitableGroupSection,
+  BitableLinkedTableAccessor
 } from './types';
 import { EditableCell } from './EditableCell';
 import {
@@ -22,6 +23,7 @@ import { BitableFormView } from './BitableFormView';
 import { hasSummaryCells, SUMMARY_SHORT_LABELS } from './aggregate';
 import type { BitableSummaryResult } from './aggregate';
 import { cellToText } from './exportTable';
+import { BitableIcon } from './BitableIcon';
 import { buildPastePlan, parseClipboardMatrix } from './clipboard';
 
 /** clipboard API 在非安全上下文（http 内网）不可用时的兜底 */
@@ -59,18 +61,18 @@ interface BitableTableProps<T extends { id: string }> {
       }[];
   selectedRowId?: string | null;
   onSelectRow?: (row: T) => void;
-  checkedIds: Record<string, boolean>;
-  onToggleCheck: (id: string, e: React.MouseEvent) => void;
-  onToggleSelectAll: (checked: boolean) => void;
+  checkedIds?: Record<string, boolean>;
+  onToggleCheck?: (id: string, e: React.MouseEvent) => void;
+  onToggleSelectAll?: (checked: boolean) => void;
   /**
    * Excel 式行选择（Shift+点击范围选择）时回传目标行集合：
    * 页面应把勾选集整体替换为这批行（作用对象与复选框勾选一致）。
    * 未提供时 Shift+点击退化为普通单行点击。
    */
   onSelectRows?: (rowIds: string[]) => void;
-  density: BitableDensity;
-  colorRules: BitableColorRule[];
-  onUpdateCell: (rowId: string, fieldId: string, value: any) => void;
+  density?: BitableDensity;
+  colorRules?: BitableColorRule[];
+  onUpdateCell?: (rowId: string, fieldId: string, value: any) => void;
   /**
    * 批量写回（一次调用只产生一步撤销）。
    * 甘特拖拽改期用它同时改「开始」和「结束」，避免产生两步撤销。
@@ -79,6 +81,8 @@ interface BitableTableProps<T extends { id: string }> {
   /** 表单视图提交：新增一条记录。不传时表单只做校验与成功页，不写回数据 */
   onCreateRow?: (values: Record<string, unknown>) => void;
   onDeleteRow?: (rowId: string) => void;
+  /** 跨表关联数据源解析器（用于 link 记录选择器与 lookup 字段投影） */
+  getLinkedTableData?: BitableLinkedTableAccessor;
   onToggleColumnLock?: (columnId: string) => void;
   /**
    * 列锁定保护判定（wiki/13 §13.18 固定字段）：返回 true 的已锁定列为
@@ -107,6 +111,8 @@ interface BitableTableProps<T extends { id: string }> {
   viewType?: BitableViewType;
   /** 当前视图完整配置：为父子记录等视图级配置提供数据 */
   viewConfig?: BitableViewConfig;
+  /** 视图配置变更回调（如在画册中切换卡片尺寸等） */
+  onUpdateViewConfig?: (updates: Partial<BitableViewConfig>) => void;
   /** 画册视图封面点「预览附件」时回传该行，由页面接到 AttachmentViewerModal */
   onOpenAttachment?: (row: T) => void;
   /**
@@ -142,18 +148,18 @@ interface BitableTableProps<T extends { id: string }> {
   virtualThreshold?: number;
 }
 
-export const BitableTable = <T extends { id: string }>({
+export const BitableGridView = <T extends { id: string }>({
   columns,
   groupedData,
   selectedRowId,
   onSelectRow,
-  checkedIds,
-  onToggleCheck,
-  onToggleSelectAll,
+  checkedIds = {},
+  onToggleCheck = () => {},
+  onToggleSelectAll = () => {},
   onSelectRows,
-  density,
-  colorRules,
-  onUpdateCell,
+  density = 'medium',
+  colorRules = [],
+  onUpdateCell = () => {},
   onUpdateCells,
   onCreateRow,
   onDeleteRow,
@@ -168,16 +174,18 @@ export const BitableTable = <T extends { id: string }>({
   onDetachRow,
   scrollToRowId,
   emptyText = '暂无符合条件的记录',
-  collapsedGroups: controlledCollapsedGroups,
+  collapsedGroups: controlledCollapsedGroups = {},
   onToggleGroupCollapse,
   viewType = 'grid',
   viewConfig,
+  onUpdateViewConfig,
   onOpenAttachment,
   onFillCells,
   onCopyCells,
   onPasteCells,
   virtualThreshold = 150,
-  fillHeight = false
+  fillHeight = false,
+  getLinkedTableData
 }: BitableTableProps<T>) => {
   const visibleColumns = columns.filter((c) => c.visible);
   // 父子记录的行折叠状态（置于条件早返回之前，保证 hooks 顺序稳定）
@@ -576,13 +584,12 @@ export const BitableTable = <T extends { id: string }>({
           : 'text-slate-700 hover:bg-slate-100'
       }`}
     >
-      <span
-        className={`material-symbols-outlined text-[15px] leading-none ${
+      <BitableIcon
+        name={icon as any}
+        className={`text-[15px] leading-none ${
           variant === 'danger' ? 'text-rose-500' : 'text-slate-400'
         }`}
-      >
-        {icon}
-      </span>
+      />
       <span>{label}</span>
     </button>
   );
@@ -621,15 +628,16 @@ export const BitableTable = <T extends { id: string }>({
   };
 
   // Row height mapping
+  const currentDensity = density || 'medium';
   const rowHeightClass = {
     compact: 'h-8 py-0.5 text-[11.5px]',
     medium: 'h-10 py-1 text-[12px]',
     relaxed: 'h-13 py-2 text-[12.5px]'
-  }[density];
+  }[currentDensity];
 
   // —— 虚拟滚动：行高固定（h-8/h-10/h-13），因此可以直接用数字算偏移 ——
   const cellContainerRef = useRef<HTMLDivElement | null>(null);
-  const ROW_H = { compact: 32, medium: 40, relaxed: 52 }[density] ?? 40;
+  const ROW_H = { compact: 32, medium: 40, relaxed: 52 }[currentDensity] ?? 40;
   const HEADER_H = 32; // thead h-8
   const GROUP_H = 30; // 分组标题行（py-1.5 + 12px 文本 + 上下边框）
   const OVERSCAN = 12; // 视口上下各多渲染 12 行，滚动时不会出现白边
@@ -739,75 +747,6 @@ export const BitableTable = <T extends { id: string }>({
     }
     return null;
   };
-
-  // Switch to alternative views (Feishu Bitable features)
-  if (viewType === 'kanban') {
-    return (
-      <BitableKanbanView
-        items={allItems}
-        columns={columns}
-        selectedRowId={selectedRowId}
-        onSelectRow={onSelectRow}
-        onUpdateCell={onUpdateCell}
-        kanbanFieldId={viewConfig?.kanbanFieldId || undefined}
-        viewConfig={viewConfig}
-      />
-    );
-  }
-
-  if (viewType === 'gallery') {
-    return (
-      <BitableGalleryView
-        items={allItems}
-        columns={columns}
-        selectedRowId={selectedRowId}
-        onSelectRow={onSelectRow}
-        coverFieldId={viewConfig?.galleryCoverFieldId || undefined}
-        onOpenAttachment={onOpenAttachment}
-        viewConfig={viewConfig}
-      />
-    );
-  }
-
-  if (viewType === 'gantt') {
-    return (
-      <BitableGanttView
-        items={allItems}
-        columns={columns}
-        selectedRowId={selectedRowId}
-        onSelectRow={onSelectRow}
-        startFieldId={viewConfig?.ganttStartFieldId || undefined}
-        endFieldId={viewConfig?.ganttEndFieldId || undefined}
-        onUpdateCell={onUpdateCell}
-        onUpdateCells={onUpdateCells}
-        viewConfig={viewConfig}
-      />
-    );
-  }
-
-  if (viewType === 'calendar') {
-    return (
-      <BitableCalendarView
-        items={allItems}
-        columns={columns}
-        selectedRowId={selectedRowId}
-        onSelectRow={onSelectRow}
-        onUpdateCell={onUpdateCell}
-        viewConfig={viewConfig}
-      />
-    );
-  }
-
-  if (viewType === 'form') {
-    return (
-      <BitableFormView
-        items={allItems}
-        columns={columns}
-        viewConfig={viewConfig}
-        onSubmit={onCreateRow}
-      />
-    );
-  }
 
   // Check if group section is hidden by any collapsed ancestor
   const isSectionVisible = (group: any): boolean => {
@@ -1317,7 +1256,7 @@ export const BitableTable = <T extends { id: string }>({
                         className="p-0.5 rounded text-emerald-600 hover:bg-emerald-100 cursor-pointer flex items-center justify-center shrink-0"
                         title="保存名称"
                       >
-                        <span className="material-symbols-outlined text-[13px] leading-none">check</span>
+                        <BitableIcon name="check" className="text-[13px] leading-none" />
                       </button>
                       <button
                         type="button"
@@ -1328,7 +1267,7 @@ export const BitableTable = <T extends { id: string }>({
                         className="p-0.5 rounded text-slate-400 hover:text-slate-600 cursor-pointer flex items-center justify-center shrink-0"
                         title="取消"
                       >
-                        <span className="material-symbols-outlined text-[13px] leading-none">close</span>
+                        <BitableIcon name="close" className="text-[13px] leading-none" />
                       </button>
                     </div>
                   ) : (
@@ -1358,14 +1297,13 @@ export const BitableTable = <T extends { id: string }>({
                         </span>
 
                         {isFieldLocked && col.type !== 'action' && !onToggleColumnLock && (
-                          <span
-                            className={`material-symbols-outlined text-[10px] shrink-0 ${
+                          <BitableIcon
+                            name="lock"
+                            className={`text-[10px] shrink-0 ${
                               isLockProtected ? 'text-red-600/80' : 'text-amber-600/80'
                             }`}
                             title={isLockProtected ? '系统固定字段（识别来源），列定义受保护，不可解锁' : '已锁定受控（只读保护）'}
-                          >
-                            lock
-                          </span>
+                          />
                         )}
 
                         {onToggleColumnLock && col.type !== 'action' && (
@@ -1390,9 +1328,10 @@ export const BitableTable = <T extends { id: string }>({
                                 : '该字段【未锁定】。点击即可锁定保护此字段'
                             }
                           >
-                            <span className="material-symbols-outlined text-[10px] leading-none">
-                              {isFieldLocked ? 'lock' : 'lock_open'}
-                            </span>
+                            <BitableIcon
+                              name={isFieldLocked ? 'lock' : 'lock_open'}
+                              className="text-[10px] leading-none"
+                            />
                           </button>
                         )}
                       </div>
@@ -1408,9 +1347,7 @@ export const BitableTable = <T extends { id: string }>({
                           className="p-0.5 -mr-1 rounded cursor-pointer transition-all flex items-center justify-center shrink-0 text-slate-400 hover:text-[#005BAC] hover:bg-blue-50 opacity-0 group-hover/col:opacity-100 focus-visible:opacity-100"
                           title={col.editable ? '点击修改字段名称（表中内容亦可修改）' : '点击修改字段名称（该字段内容为只读）'}
                         >
-                          <span className="material-symbols-outlined text-[11px] leading-none">
-                            edit
-                          </span>
+                          <BitableIcon name="edit" className="text-[11px] leading-none" />
                         </button>
                       )}
                     </div>
@@ -1451,7 +1388,7 @@ export const BitableTable = <T extends { id: string }>({
                 className="py-12 text-center text-slate-400 text-[12.5px]"
               >
                 <div className="flex flex-col items-center justify-center gap-1.5">
-                  <span className="material-symbols-outlined text-[28px] text-slate-300">search_off</span>
+                  <BitableIcon name="search_off" className="text-[28px] text-slate-300" />
                   <span>{emptyText}</span>
                   <span className="text-[11px] text-slate-400">请尝试清除部分筛选条件或切换其他业务视图</span>
                 </div>
@@ -1521,9 +1458,10 @@ export const BitableTable = <T extends { id: string }>({
                         style={{ paddingLeft: `${10 + level * 22}px` }}
                       >
                         <div className="flex items-center gap-2">
-                          <span className="material-symbols-outlined text-[16px] text-slate-500 transition-transform">
-                            {isCollapsed ? 'chevron_right' : 'expand_more'}
-                          </span>
+                          <BitableIcon
+                            name={isCollapsed ? 'chevron_right' : 'expand_more'}
+                            className="text-[16px] text-slate-500 transition-transform"
+                          />
                           {fieldLabel && (
                             <span className="px-1.5 py-0.2 bg-white text-slate-500 text-[10.5px] rounded border border-slate-200 font-sans font-normal shadow-2xs">
                               {fieldLabel}
@@ -1678,9 +1616,7 @@ export const BitableTable = <T extends { id: string }>({
                                     className="w-4 h-full flex items-center justify-center cursor-grab active:cursor-grabbing text-slate-400 hover:text-[#005BAC]"
                                     title="按住上下拖动：调整行顺序；拖到行中部可成为该行的子记录"
                                   >
-                                    <span className="material-symbols-outlined text-[14px] leading-none">
-                                      drag_indicator
-                                    </span>
+                                    <BitableIcon name="drag_indicator" className="text-[14px] leading-none" />
                                   </span>
                                 )}
                                 {onDeleteRow && (
@@ -1697,9 +1633,7 @@ export const BitableTable = <T extends { id: string }>({
                                     className="w-4 h-full flex items-center justify-center text-rose-500 hover:text-rose-700 hover:bg-rose-50 cursor-pointer"
                                     title={`删除第 ${index + 1} 行记录`}
                                   >
-                                    <span className="material-symbols-outlined text-[13px] leading-none">
-                                      delete
-                                    </span>
+                                    <BitableIcon name="delete" className="text-[13px] leading-none" />
                                   </button>
                                 )}
                               </div>
@@ -1774,9 +1708,10 @@ export const BitableTable = <T extends { id: string }>({
                                         className="w-4 h-4 -ml-1 mr-0.5 shrink-0 rounded hover:bg-slate-200/80 text-slate-500 hover:text-slate-800 flex items-center justify-center cursor-pointer transition-colors"
                                         title={collapsedRows[row.id] ? '展开子记录' : '折叠子记录'}
                                       >
-                                        <span className="material-symbols-outlined text-[15px] leading-none">
-                                          {collapsedRows[row.id] ? 'chevron_right' : 'expand_more'}
-                                        </span>
+                                        <BitableIcon
+                                          name={collapsedRows[row.id] ? 'chevron_right' : 'expand_more'}
+                                          className="text-[15px] leading-none"
+                                        />
                                       </button>
                                     ) : (
                                       <span className="w-4 shrink-0" />
@@ -1787,6 +1722,7 @@ export const BitableTable = <T extends { id: string }>({
                                       value={val}
                                       highlightStyle={cellColorStyle}
                                       onUpdate={(newVal) => onUpdateCell(row.id, col.id, newVal)}
+                                      getLinkedTableData={getLinkedTableData}
                                     />
                                   </div>
                                 ) : (
@@ -1796,6 +1732,7 @@ export const BitableTable = <T extends { id: string }>({
                                     value={val}
                                     highlightStyle={cellColorStyle}
                                     onUpdate={(newVal) => onUpdateCell(row.id, col.id, newVal)}
+                                    getLinkedTableData={getLinkedTableData}
                                   />
                                 )}
 
@@ -1837,9 +1774,10 @@ export const BitableTable = <T extends { id: string }>({
                         style={{ width: 36, minWidth: 36 }}
                         title="本组汇总"
                       >
-                        <span className="material-symbols-outlined text-[13px] text-slate-400 leading-none">
-                          functions
-                        </span>
+                        <BitableIcon
+                          name="functions"
+                          className="text-[13px] text-slate-400 leading-none"
+                        />
                       </td>
                       <td
                         className="px-0 text-center border-r border-slate-200 sticky left-[36px] z-10 bg-inherit text-[10px] text-slate-400"
@@ -1962,3 +1900,97 @@ export const BitableTable = <T extends { id: string }>({
     </div>
   );
 };
+
+/**
+ * 多维表格总调度组件：根据 viewType 路由至具体视图组件。
+ * 各视图各自拥有独立稳定的 Hook 生命周期，杜绝条件分支早返回导致的 Hook 规则破坏。
+ */
+export const BitableTable = <T extends { id: string }>(props: BitableTableProps<T>) => {
+  const {
+    viewType = 'grid',
+    columns,
+    groupedData,
+    selectedRowId,
+    onSelectRow,
+    onUpdateCell,
+    onUpdateCells,
+    onCreateRow,
+    viewConfig,
+    onUpdateViewConfig,
+    onOpenAttachment
+  } = props;
+
+  const allItems = useMemo(() => groupedData.flatMap((g) => g.items), [groupedData]);
+
+  if (viewType === 'kanban') {
+    return (
+      <BitableKanbanView
+        items={allItems}
+        columns={columns}
+        selectedRowId={selectedRowId}
+        onSelectRow={onSelectRow}
+        onUpdateCell={onUpdateCell}
+        kanbanFieldId={viewConfig?.kanbanFieldId || undefined}
+        viewConfig={viewConfig}
+      />
+    );
+  }
+
+  if (viewType === 'gallery') {
+    return (
+      <BitableGalleryView
+        items={allItems}
+        columns={columns}
+        selectedRowId={selectedRowId}
+        onSelectRow={onSelectRow}
+        coverFieldId={viewConfig?.galleryCoverFieldId || undefined}
+        onOpenAttachment={onOpenAttachment}
+        viewConfig={viewConfig}
+        onUpdateViewConfig={onUpdateViewConfig}
+      />
+    );
+  }
+
+  if (viewType === 'gantt') {
+    return (
+      <BitableGanttView
+        items={allItems}
+        columns={columns}
+        selectedRowId={selectedRowId}
+        onSelectRow={onSelectRow}
+        startFieldId={viewConfig?.ganttStartFieldId || undefined}
+        endFieldId={viewConfig?.ganttEndFieldId || undefined}
+        onUpdateCell={onUpdateCell}
+        onUpdateCells={onUpdateCells}
+        viewConfig={viewConfig}
+      />
+    );
+  }
+
+  if (viewType === 'calendar') {
+    return (
+      <BitableCalendarView
+        items={allItems}
+        columns={columns}
+        selectedRowId={selectedRowId}
+        onSelectRow={onSelectRow}
+        onUpdateCell={onUpdateCell}
+        viewConfig={viewConfig}
+      />
+    );
+  }
+
+  if (viewType === 'form') {
+    return (
+      <BitableFormView
+        items={allItems}
+        columns={columns}
+        viewConfig={viewConfig}
+        onSubmit={onCreateRow}
+      />
+    );
+  }
+
+  return <BitableGridView {...props} />;
+};
+

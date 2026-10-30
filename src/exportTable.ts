@@ -28,7 +28,7 @@ export function cellToText(raw: unknown): string {
 /** 数字列才尝试转成数字，其余保持文本，避免「001」被吃掉前导零 */
 function cellToNumber(raw: unknown): number | null {
   if (raw === undefined || raw === null || raw === '') return null;
-  const cleaned = String(raw).replace(/[,\s¥$€£]/g, '');
+  const cleaned = String(raw).replace(/[,\s¥$€£%]/g, '');
   if (cleaned === '') return null;
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
@@ -52,8 +52,8 @@ export function buildCsv(
     lines.push(
       columns
         .map((c) => {
-          // 数字列输出纯数字（去掉千分位/货币符号），否则 Excel 里会被当成文本无法求和
-          if (c.type === 'number') {
+          // 数字类列输出纯数字（去掉千分位/货币符号），否则 Excel 里会被当成文本无法求和
+          if (c.type === 'number' || c.type === 'currency' || c.type === 'progress' || c.type === 'rating') {
             const n = cellToNumber(row[c.id]);
             if (n !== null) return String(n);
           }
@@ -214,7 +214,7 @@ function buildSheetXml(rows: Record<string, unknown>[], columns: ExportColumn[])
         const raw = row[col.id];
         if (raw === undefined || raw === null || raw === '') return '';
 
-        if (col.type === 'number') {
+        if (col.type === 'number' || col.type === 'currency' || col.type === 'progress' || col.type === 'rating') {
           const n = cellToNumber(raw);
           return n === null ? '' : `<c r="${ref}"><v>${n}</v></c>`;
         }

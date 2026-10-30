@@ -34,7 +34,7 @@
 | --- | --- |
 | 六种视图 | 表格 grid / 看板 kanban / 画册 gallery / 甘特 gantt / 日历 calendar / 表单 form，共用同一份视图配置 |
 | 视图可写 | 看板拖卡片改状态、日历拖事件改日期、甘特拖色条改期、表单提交写回，六种视图都能改数据 |
-| 字段配置 | 7 种字段类型、增删改、重命名、拖拽排序、调列宽、锁定（受控只读）、冻结列、视图级显隐 |
+| 字段配置 | 16 种企业级字段类型（含进度条、星级评分、货币金额、邮箱、电话等）、增删改、重命名、拖拽排序、调列宽、锁定（受控只读）、冻结列、视图级显隐 |
 | 筛选 / 排序 | AND / OR 多条件筛选，**数字/日期列额外支持 大于 / 大于等于 / 小于 / 小于等于 / 介于**；多字段排序 |
 | 多级分组 | 飞书式嵌套分组，可逐级折叠、全部折叠 |
 | 分组汇总 | 组尾汇总行：求和 / 平均值 / 最大 / 最小 / 计数，按列配置，未分组时也能出底部合计 |
@@ -68,9 +68,9 @@
 | 表格 | 行内编辑、拖拽填充、拖拽换列、拖拽建父子记录、右键菜单 | `onUpdateCell` |
 | 看板 | **拖卡片到别的泳道改状态**（含空泳道，可拖入没有记录的状态） | `kanbanFieldId` + `onUpdateCell` |
 | 日历 | **拖事件条到别的日期格改日期**（保留原时间部分） | `calendarDateFieldId` + `onUpdateCell` |
-| 甘特 | **真实时间轴**：按月/日双行表头定位；**拖色条整体改期**、**拖右边缘改结束日** | `ganttStartFieldId` + `ganttEndFieldId` + `onUpdateCells` |
-| 画册 | 卡片浏览、点封面预览附件 | `galleryCoverFieldId` + `onOpenAttachment` |
-| 表单 | **提交后新增一条记录**，按字段类型转换值 | `onCreateRow` |
+| 甘特 | **真实时间轴**：日/周/月刻度切换、今日红虚线贯通标线、里程碑菱形符号外挂、平滑滚动定位到今天、前驱依赖箭头连线与冲突预警、**拖色条整体改期**、**拖右边缘改结束日** | `ganttStartFieldId` + `ganttEndFieldId` + `onUpdateCells` |
+| 画册 | **大图与卡片流**：卡片尺寸即时切换（小/中/大）、内置全屏 Lightbox 交互式预览（平滑缩放、上一张/下一张键盘快捷键、多附件切换）、即时搜索过滤 | `galleryCoverFieldId` + `onOpenAttachment` |
+| 表单 | **沉浸式录入**：特化输入组件（评分五星、进度胶囊滑块、金额前缀、邮箱/电话/网址图标）、字段级必填/格式实时校验高亮、填报完成度仪表盘、提交摘要卡片 | `onSubmit` |
 
 几个实现上的约定：
 
@@ -194,7 +194,7 @@ npm run typecheck    # tsc --noEmit
 
 ```bash
 npm run build
-npm pack             # 产出 react-bitable-0.1.0.tgz
+npm pack             # 产出 react-bitable-0.2.0.tgz
 # 然后在你的项目里
 npm install /path/to/react-bitable-0.1.0.tgz
 ```
@@ -353,8 +353,8 @@ const bt = useBitable<Task>({
 }
 ```
 
-**6. 图标字体要自托管。**
-组件用 Google Material Symbols。内网 / 离线平台请把字体文件放进自己的静态资源，或替换 `material-symbols-outlined` 那一层的图标组件。
+**6. 图标完全内置，无需网络与外部字体。**
+组件全线采用内置 SVG 矢量图标字典（`BitableIcon` + `ICONS`），`fill="currentColor"` 纯矢量渲染，内网与断网离线环境开箱即用，无需加载 Google Fonts。
 
 **7. SSR 安全但不持久。**
 没有 `localStorage` 的环境会自动降级为内存存储，不会抛异常，但刷新即丢。服务端渲染的平台请在客户端挂载后再依赖持久化。
@@ -652,7 +652,19 @@ toggleGroupCollapse, toggleAllGroupsCollapse
 
 ### 字段类型
 
-`text` · `number` · `select` · `date` · `badge` · `boolean` · `action`
+`text` · `number` · `select` · `multiSelect` · `date` · `progress` · `rating` · `currency` · `email` · `phone` · `createdTime` · `updatedTime` · `createdBy` · `updatedBy` · `autoNumber` · `link` · `lookup` · `badge` · `boolean` · `url` · `user` · `group` · `attachment` · `action`
+
+高频企业业务、数据关系与系统审计字段特性：
+- **`link` (关联记录)**：关联其他数据表中的一条或多条记录，弹层（`BitableLinkPopover`）支持即时搜索检索、多选/单选与胶囊展示。
+- **`lookup` (跨表查找引用)**：根据关联记录自动从目标数据表动态投影对应字段（如关联成员后自动带出所属部门与电话），与筛选、排序、搜索、导出全面贯通，受控只读。
+- **`createdTime` / `updatedTime` (系统时间戳)**：新增行、行内编辑、拖拽填充、粘贴时自动打点时间戳（格式 `YYYY-MM-DD HH:mm:ss`），受控只读防篡改。
+- **`createdBy` / `updatedBy` (审计人员)**：支持从 `useBitable` 传入 `currentUser`，自动记录创建者与最后修改者头像徽标，受控只读。
+- **`autoNumber` (自动流水号)**：支持配置前缀（如 `TASK-` / `REC-`）、补零位数与起始编号，新增与复制行自动递增生成。
+- **`progress` (进度条)**：0-100% 胶囊进度条，颜色阈值自动分级（<30% 黄、30-79% 蓝、>=80% 绿），拖拽填充以 5% 步长递增，行内直观编辑。
+- **`rating` (星级评分)**：1-5 星级评分，悬停实时预览、一键点击打分，点击已选星级自动清空，支持卡片与画册星级渲染。
+- **`currency` (货币金额)**：千分位 + 两位小数 + 货币符号（支持 `currencySymbol` 自定义，默认 `¥`），筛选自动剥离货币符号，分组默认求和汇总。
+- **`email` (电子邮箱)**：支持表格与卡片内 `mailto:` 一键唤起邮件客户端，悬停显露快捷编辑控柄。
+- **`phone` (电话号码)**：支持表格与卡片内 `tel:` 一键唤起拨号，悬停显露快捷编辑控柄。
 
 `BitableColumnConfig` 里几个值得注意的字段：
 
@@ -660,6 +672,8 @@ toggleGroupCollapse, toggleAllGroupsCollapse
 | --- | --- |
 | `isLocked` | 锁定字段：禁止编辑、重命名、删除（主字段通常锁死） |
 | `isFrozen` | 冻结列：横向滚动时固定在左侧 |
+| `currencySymbol` | 货币字段的货币符号（如 `¥`、`$`、`€`），默认 `¥` |
+| `maxRating` | 评分字段的最大星级，默认 `5` |
 | `render(row, value, onUpdate?)` | 自定义渲染，接管该列的格子内容 |
 | `resolveFiles(row)` | 附件列的文件来源。附件不在本行字段上时用它（如挂在关联记录上） |
 
@@ -699,18 +713,23 @@ toggleGroupCollapse, toggleAllGroupsCollapse
 > 组件内部仍有个别位置硬编码了 `#005BAC`（主要在图标的 hover 态与数字徽标）。
 > 换主题时若发现残留，直接全局搜 `005BAC` 替换。
 
-## 图标字体
+## 内置图标系统（离线 / 内网开箱即用）
 
-组件用 Google **Material Symbols Outlined** 渲染图标。页面里需要引入字体，否则图标会显示成文字：
+组件库内置了轻量级纯 SVG 矢量图标系统，**完全移除了对 Google Fonts / 外部网络字体的依赖**：
 
-```html
-<link
-  href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
-  rel="stylesheet"
-/>
+- **零外部请求**：87+ 常用多维表矢量图标直接打包在组件库中，内网环境、政企专网或纯离线环境无需任何字体文件自托管。
+- **自适应颜色与尺寸**：SVG 默认采用 `fill="currentColor"` 与 `1em` 宽高，自动继承父级文字颜色与字号。
+- **组件自由调用**：支持直接从包内导入 `<BitableIcon name="..." />` 与 `ICONS` 字典，方便在自定义操作按钮、插槽中使用。
+
+```tsx
+import { BitableIcon } from 'react-bitable';
+
+// 在自定义工具栏或业务按钮中直接使用
+<button className="flex items-center gap-1 text-slate-700">
+  <BitableIcon name="table_chart" className="text-sm text-[#005BAC]" />
+  <span>数据表</span>
+</button>
 ```
-
-内网 / 离线环境请把字体文件自托管，或在 `EditableCell` / `BitableToolbar` 里把 `<span className="material-symbols-outlined">` 换成你自己的 icon 组件。
 
 ---
 
@@ -721,7 +740,12 @@ src/
 ├── index.ts                     统一出口
 ├── styles.css                   行为样式 + CSS 变量主题
 ├── types.ts                     字段 / 视图 / 筛选 / 染色 全部类型
+├── icons.tsx                    内置 87+ 矢量 SVG 图标路径字典（零网络依赖）
+├── BitableIcon.tsx              图标组件（1em 宽高自适应、currentColor）
 ├── useBitable.ts                状态中枢：持久化、筛选排序分组、撤销重做、所有写操作
+├── workspace.ts                 多表工作区容器模型与持久化驱动
+├── useBitableWorkspace.ts       多表工作区 React Hook
+├── BitableWorkspaceSidebar.tsx  多表工作区侧边栏导航组件
 ├── cardModel.ts                 看板 / 画册 / 甘特共用的卡片模型
 ├── cellValue.ts                 单元格取值与选项解析（纯函数）
 ├── filtering.ts                 筛选求值：比较语义 + 操作符适用范围（纯函数）
@@ -753,8 +777,6 @@ playground/                      demo（npm run dev）
 - **多人同时改同一份表结构会互相覆盖**：`saveSchema` 是整份覆盖（不做字段级合并），两个人同时改字段配置时后写的赢。行数据是字段级 diff，冲突面小得多。真正的多人协作还需要服务端加版本号 / 冲突解决与实时推送。
 - **虚拟滚动开启时跨屏拖拽填充受限**：DOM 里没有渲染的行无法被拖到，需要目标行在可视区内。
 - **`any` 未收干净**：`BitableColumnConfig<T = any>` 等位置保留了 `any`，泛型收紧要逐步做。
-- **无测试**：仓库目前没有单元测试，靠 playground 手工回归（纯函数模块可单独 import 测，`filtering` / `aggregate` / `exportTable` 都已用临时脚本验过边界）。
-- **图标依赖 Google Fonts**：离线环境需自托管字体。
 
 ## Roadmap
 
@@ -771,10 +793,15 @@ playground/                      demo（npm run dev）
 - [x] 导出 CSV / XLSX（零依赖）
 - [x] 虚拟滚动（平铺与分组）
 - [x] 数据源适配层（行级 CRUD + 写后同步 + REST / 内存适配器）
-- [ ] 列配置与视图同步到后端
+- [x] 列配置与视图同步到后端
+- [x] 多数据表工作区与侧边栏（useBitableWorkspace + BitableWorkspaceSidebar）
+- [x] 系统审计与自动编号字段（创建时间/人、修改时间/人、Auto Number 纯函数与自动打点）
+- [x] 表间单向 / 双向关联（Link to Record）与跨表查找引用（Lookup）
+- [ ] 关联汇总（Rollup）与轻量公式引擎（Formula AST）
 - [ ] 实时协作（WebSocket / Supabase Realtime）
-- [ ] Vitest + Testing Library 覆盖 hook 与筛选排序逻辑
-- [ ] 去掉 Google Fonts 依赖，改内置 SVG 图标
+- [x] Vitest 覆盖核心纯函数模块（155 个单测全部通过）
+- [ ] Testing Library 覆盖 UI 组件与 Hook 集成测试
+- [x] 去掉 Google Fonts 依赖，改内置 SVG 图标（内置 92+ 矢量图标 BitableIcon，内网/离线开箱即用）
 
 ---
 

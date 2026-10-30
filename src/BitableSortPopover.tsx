@@ -1,5 +1,6 @@
 import React from 'react';
 import { BitableColumnConfig, BitableSortRule } from './types';
+import { BitableIcon } from './BitableIcon';
 
 interface BitableSortPopoverProps<T> {
   columns: BitableColumnConfig<T>[];
@@ -52,7 +53,7 @@ export const BitableSortPopover = <T,>({
     <div className="absolute left-0 top-full mt-1.5 w-84 bg-white border border-slate-200 rounded-lg shadow-xl z-50 p-3 select-none text-slate-800 text-[12px] overflow-hidden">
       <div className="flex items-center justify-between pb-2 border-b border-slate-100">
         <div className="flex items-center gap-1.5 font-semibold text-slate-900">
-          <span className="material-symbols-outlined text-[16px] text-slate-500">swap_vert</span>
+          <BitableIcon name="swap_vert" className="text-[16px] text-slate-500" />
           <span>多级排序规则</span>
           {sortRules.length > 0 && (
             <span className="text-[11px] font-normal text-[#005BAC]">({sortRules.length} 级排序)</span>
@@ -73,7 +74,7 @@ export const BitableSortPopover = <T,>({
             type="button"
             className="text-slate-400 hover:text-slate-600 rounded p-0.5 cursor-pointer"
           >
-            <span className="material-symbols-outlined text-[16px]">close</span>
+            <BitableIcon name="close" className="text-[16px]" />
           </button>
         </div>
       </div>
@@ -134,7 +135,7 @@ export const BitableSortPopover = <T,>({
                 onClick={() => handleRemoveRule(rule.id)}
                 className="p-1 text-slate-400 hover:text-red-500 rounded cursor-pointer shrink-0"
               >
-                <span className="material-symbols-outlined text-[15px]">delete</span>
+                <BitableIcon name="delete" className="text-[15px]" />
               </button>
             </div>
           ))
@@ -149,7 +150,7 @@ export const BitableSortPopover = <T,>({
           disabled={sortRules.length >= sortableColumns.length}
           className="h-7 px-2.5 flex items-center gap-1 rounded border border-slate-200 hover:bg-slate-50 text-slate-700 text-[11.5px] cursor-pointer disabled:opacity-30"
         >
-          <span className="material-symbols-outlined text-[14px]">add</span>
+          <BitableIcon name="add" className="text-[14px]" />
           <span>添加排序规则</span>
         </button>
 

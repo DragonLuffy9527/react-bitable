@@ -24,7 +24,12 @@ const FILLABLE_TYPES: BitableFieldType[] = [
   'group',
   'url',
   'badge',
-  'boolean'
+  'boolean',
+  'progress',
+  'rating',
+  'currency',
+  'email',
+  'phone'
 ];
 
 export const isFillableFieldType = (type: BitableFieldType) =>
@@ -77,11 +82,25 @@ export const incrementValue = (
   if (isEmptyValue(value)) return cloneValue(value);
   if (step === 0) return cloneValue(value);
 
-  if (type === 'number') {
+  if (type === 'number' || type === 'currency') {
     const num = Number(String(value).trim());
     if (!Number.isFinite(num)) return cloneValue(value);
     const next = num + step;
     // 原值存的是字符串就仍回写字符串，保持和 EditableCell 的 input value 一致
+    return typeof value === 'number' ? next : String(next);
+  }
+
+  if (type === 'progress') {
+    const num = Number(String(value).trim());
+    if (!Number.isFinite(num)) return cloneValue(value);
+    const next = Math.min(100, Math.max(0, num + step * 5));
+    return typeof value === 'number' ? next : String(next);
+  }
+
+  if (type === 'rating') {
+    const num = Number(String(value).trim());
+    if (!Number.isFinite(num)) return cloneValue(value);
+    const next = Math.min(5, Math.max(0, num + step));
     return typeof value === 'number' ? next : String(next);
   }
 

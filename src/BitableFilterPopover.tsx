@@ -1,6 +1,7 @@
 import React from 'react';
 import { BitableColumnConfig, BitableFilterRule, FilterOperator } from './types';
 import { ComparableKind, operatorsFor, resolveComparableKind } from './filtering';
+import { BitableIcon } from './BitableIcon';
 
 const OPERATOR_LABELS: Record<FilterOperator, string> = {
   contains: '包含',
@@ -92,7 +93,7 @@ export const BitableFilterPopover = <T,>({
     <div className="absolute left-0 top-full mt-1.5 w-[520px] max-w-[calc(100vw-32px)] bg-white border border-slate-200 rounded-lg shadow-xl z-50 p-3 select-none text-slate-800 text-[12px] overflow-hidden">
       <div className="flex items-center justify-between pb-2 border-b border-slate-100">
         <div className="flex items-center gap-1.5 font-semibold text-slate-900">
-          <span className="material-symbols-outlined text-[16px] text-slate-500">filter_alt</span>
+          <BitableIcon name="filter_alt" className="text-[16px] text-slate-500" />
           <span>高级筛选条件</span>
           {filterRules.length > 0 && (
             <span className="text-[11px] font-normal text-[#005BAC]">({filterRules.length} 条已生效)</span>
@@ -113,7 +114,7 @@ export const BitableFilterPopover = <T,>({
             type="button"
             className="text-slate-400 hover:text-slate-600 rounded p-0.5 cursor-pointer"
           >
-            <span className="material-symbols-outlined text-[16px]">close</span>
+            <BitableIcon name="close" className="text-[16px]" />
           </button>
         </div>
       </div>
@@ -217,7 +218,7 @@ export const BitableFilterPopover = <T,>({
                   className="p-1 text-slate-400 hover:text-red-500 rounded cursor-pointer shrink-0"
                   title="删除条件"
                 >
-                  <span className="material-symbols-outlined text-[15px]">delete</span>
+                  <BitableIcon name="delete" className="text-[15px]" />
                 </button>
               </div>
               );
@@ -233,7 +234,7 @@ export const BitableFilterPopover = <T,>({
           onClick={handleAddRule}
           className="h-7 px-2.5 flex items-center gap-1 rounded border border-slate-200 hover:bg-slate-50 text-slate-700 text-[11.5px] cursor-pointer"
         >
-          <span className="material-symbols-outlined text-[14px]">add</span>
+          <BitableIcon name="add" className="text-[14px]" />
           <span>添加筛选条件</span>
         </button>
 

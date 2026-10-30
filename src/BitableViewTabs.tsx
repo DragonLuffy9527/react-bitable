@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { BitableViewConfig, BitableViewType, BitableViewScope } from './types';
+import { BitableIcon } from './BitableIcon';
 
 interface BitableViewTabsProps {
   views: BitableViewConfig[];
@@ -131,7 +132,7 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
       <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5">
         {/* Left icon / navigator */}
         <div className="px-1.5 text-slate-400 flex items-center shrink-0">
-          <span className="material-symbols-outlined text-[16px]">view_column</span>
+          <BitableIcon name="view_column" className="text-[16px]" />
         </div>
 
         {/* Tab List */}
@@ -177,13 +178,12 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
               }
             >
               {/* View Icon */}
-              <span
-                className={`material-symbols-outlined text-[15px] ${
+              <BitableIcon
+                name={v.icon || defaultIcon}
+                className={`text-[15px] ${
                   isActive ? 'text-[#005BAC]' : 'text-slate-400 group-hover:text-slate-600'
                 }`}
-              >
-                {v.icon || defaultIcon}
-              </span>
+              />
 
               {/* View Name（双击进入内联重命名） */}
               {renamingId === v.id ? (
@@ -231,22 +231,20 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
 
               {/* Status Badges: Lock & Personal（与「⋯」一致，悬停/菜单打开时才显现，避免页签挂满橙色小锁） */}
               {isLocked && (
-                <span
-                  className={`material-symbols-outlined text-[10px] text-amber-600 -ml-0.5 shrink-0 transition-opacity duration-150 ${
+                <BitableIcon
+                  name="lock"
+                  className={`text-[10px] text-amber-600 -ml-0.5 shrink-0 transition-opacity duration-150 ${
                     isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
                   }`}
                   title="此视图已锁定配置"
-                >
-                  lock
-                </span>
+                />
               )}
               {isPersonal && (
-                <span
-                  className="material-symbols-outlined text-[12px] text-sky-600 -ml-0.5 shrink-0"
+                <BitableIcon
+                  name="person"
+                  className="text-[12px] text-sky-600 -ml-0.5 shrink-0"
                   title="个人私有视图"
-                >
-                  person
-                </span>
+                />
               )}
 
               {/* Tab More Options Button ('...') */}
@@ -271,7 +269,7 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
                 }`}
                 title="视图操作菜单"
               >
-                <span className="material-symbols-outlined text-[14px] block">more_vert</span>
+                <BitableIcon name="more_vert" className="text-[14px] block" />
               </button>
 
               {/* Context Menu Dropdown（Portal 到 body，避免被表头/滚动容器遮挡） */}
@@ -305,9 +303,10 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
                         : '重命名视图'
                     }
                   >
-                    <span className={`material-symbols-outlined text-[15px] ${isMaster || isLocked ? 'text-slate-300' : 'text-slate-400'}`}>
-                      edit
-                    </span>
+                    <BitableIcon
+                      name="edit"
+                      className={`text-[15px] ${isMaster || isLocked ? 'text-slate-300' : 'text-slate-400'}`}
+                    />
                     <span>重命名视图</span>
                   </button>
 
@@ -320,7 +319,7 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
                     }}
                     className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-50 text-left cursor-pointer"
                   >
-                    <span className="material-symbols-outlined text-[15px] text-slate-400">content_copy</span>
+                    <BitableIcon name="content_copy" className="text-[15px] text-slate-400" />
                     <span>复制视图</span>
                   </button>
 
@@ -333,9 +332,10 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
                     }}
                     className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-50 text-left cursor-pointer"
                   >
-                    <span className={`material-symbols-outlined text-[15px] ${isLocked ? 'text-amber-600' : 'text-slate-400'}`}>
-                      {isLocked ? 'lock_open' : 'lock'}
-                    </span>
+                    <BitableIcon
+                      name={isLocked ? 'lock_open' : 'lock'}
+                      className={`text-[15px] ${isLocked ? 'text-amber-600' : 'text-slate-400'}`}
+                    />
                     <span>{isLocked ? '解锁视图配置' : '锁定视图配置'}</span>
                   </button>
 
@@ -357,9 +357,10 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
                         : 'hover:bg-slate-50 cursor-pointer'
                     }`}
                   >
-                    <span className={`material-symbols-outlined text-[15px] ${isMaster ? 'text-slate-300' : 'text-slate-400'}`}>
-                      {isMaster ? 'lock' : isPersonal ? 'public' : 'person'}
-                    </span>
+                    <BitableIcon
+                      name={isMaster ? 'lock' : isPersonal ? 'public' : 'person'}
+                      className={`text-[15px] ${isMaster ? 'text-slate-300' : 'text-slate-400'}`}
+                    />
                     <span>{isMaster ? '总表固定协作视图' : isPersonal ? '转为协作视图' : '转为个人视图'}</span>
                   </button>
 
@@ -374,7 +375,7 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
                         }}
                         className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-red-50 text-red-600 text-left cursor-pointer font-medium"
                       >
-                        <span className="material-symbols-outlined text-[15px] text-red-500">delete</span>
+                        <BitableIcon name="delete" className="text-[15px] text-red-500" />
                         <span>删除视图</span>
                       </button>
                     </div>
@@ -404,7 +405,7 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
             className="h-7 w-7 rounded-md hover:bg-slate-100 text-slate-500 hover:text-slate-800 flex items-center justify-center cursor-pointer transition-colors shrink-0"
             title="新建视图"
           >
-            <span className="material-symbols-outlined text-[16px]">add</span>
+            <BitableIcon name="add" className="text-[16px]" />
           </button>
 
           {/* Feishu Add View Dropdown Menu（Portal 到 body） */}
@@ -427,9 +428,10 @@ export const BitableViewTabs: React.FC<BitableViewTabsProps> = ({
                     onClick={() => handleSelectCreateType(opt.type, opt.label)}
                     className="w-full p-2 flex items-start gap-2.5 rounded-lg hover:bg-slate-50 text-left transition-colors cursor-pointer group"
                   >
-                    <span className="material-symbols-outlined text-[18px] text-slate-500 group-hover:text-[#005BAC] mt-0.5">
-                      {opt.icon}
-                    </span>
+                    <BitableIcon
+                      name={opt.icon}
+                      className="text-[18px] text-slate-500 group-hover:text-[#005BAC] mt-0.5"
+                    />
                     <div>
                       <div className="font-bold text-slate-800 group-hover:text-[#005BAC]">
                         {opt.label}

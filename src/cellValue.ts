@@ -110,3 +110,83 @@ export function initialsOf(name: string): string {
 /** 判断字段是否属于「多值」类型，供表格/卡片统一判定 */
 export const isMultiValueType = (type: string): boolean =>
   type === 'multiSelect' || type === 'user' || type === 'group';
+
+/**
+ * 货币数值解析：剔除千分位、货币符号与空格后转数字。
+ * 空值或非法输入返回 null。
+ */
+export function parseCurrency(raw: unknown): number | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const cleaned = s.replace(/[,\s¥$€£]/g, '');
+  if (!cleaned || cleaned === '-' || cleaned === '.') return null;
+  const n = parseFloat(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * 货币格式化：带千分位与两位小数。
+ * 空值返回空串，不把空值渲染成 ¥ 0.00。
+ */
+export function formatCurrency(raw: unknown, symbol = '¥'): string {
+  const n = parseCurrency(raw);
+  if (n === null) return '';
+  const formatted = n.toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+  return `${symbol} ${formatted}`;
+}
+
+/**
+ * 进度值解析：支持 0-100 数值，或带 % 结尾的字符串。
+ * 强制钳制在 0 ~ 100 范围。
+ */
+export function parseProgress(raw: unknown): number | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw)) return null;
+    return Math.min(100, Math.max(0, Math.round(raw)));
+  }
+  const s = String(raw).trim();
+  if (!s) return null;
+  const cleaned = s.replace(/%/g, '').replace(/[,\s]/g, '');
+  if (!cleaned) return null;
+  const n = parseFloat(cleaned);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(100, Math.max(0, Math.round(n)));
+}
+
+/**
+ * 进度展示对象：包含百分比数值（0-100）和文本（如 "85%"）。
+ */
+export function formatProgress(raw: unknown): { percent: number; text: string } {
+  const p = parseProgress(raw);
+  if (p === null) return { percent: 0, text: '' };
+  return { percent: p, text: `${p}%` };
+}
+
+/**
+ * 评分数值解析：钳制在 0 ~ maxRating（默认 5）之间的整数。
+ */
+export function parseRating(raw: unknown, max = 5): number {
+  if (raw === null || raw === undefined) return 0;
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw) || raw <= 0) return 0;
+    return Math.min(max, Math.max(0, Math.round(raw)));
+  }
+  const s = String(raw).trim();
+  if (!s) return 0;
+  const n = parseFloat(s);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(max, Math.max(0, Math.round(n)));
+}
+
+/**
+ * 评分格式化对象。
+ */
+export function formatRating(raw: unknown, max = 5): { rating: number; max: number } {
+  return { rating: parseRating(raw, max), max };
+}

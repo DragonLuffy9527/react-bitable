@@ -18,19 +18,25 @@ import { BitableGroupPopover } from './BitableGroupPopover';
 import { BitableDensityPopover } from './BitableDensityPopover';
 import { BitableColorRulePopover } from './BitableColorRulePopover';
 import { BitableViewConfigPopover } from './BitableViewConfigPopover';
+import { BitableAddRecordPopover } from './BitableAddRecordPopover';
+import { BitableIcon } from './BitableIcon';
 
 interface BitableToolbarProps<T> {
   columns: BitableColumnConfig<T>[];
   activeView: BitableViewConfig;
   totalViews?: number;
   isMasterView?: boolean;
-  onAddRecord: () => void;
+  onAddRecord: (count?: number, anchorRowId?: string | null) => void;
   onDeleteRecord?: () => void;
-  /** 点击「导入表格」按钮：通常打开 BitableImportDialog，不传则不显示该按钮 */
+  /** 点击「导入」按钮：通常打开 BitableImportDialog，不传则不显示该按钮 */
   onImport?: () => void;
   /** 点击「导出」菜单项：导出当前视图（已筛选/排序后）的全部记录 */
   onExport?: (format: 'csv' | 'xlsx') => void;
   selectedRecordCount?: number;
+  /** 当前选中的单行 ID（用于确定在行后添加的插入点） */
+  selectedRowId?: string | null;
+  /** 当前选中的行 ID 列表 */
+  selectedRowIds?: string[];
   // Undo / Redo（Ctrl+Z / Ctrl+Shift+Z），不传则不显示
   onUndo?: () => void;
   onRedo?: () => void;
@@ -78,7 +84,7 @@ interface BitableToolbarProps<T> {
   extraActions?: React.ReactNode;
 }
 
-type ActivePopoverType = 'field' | 'view' | 'filter' | 'group' | 'sort' | 'density' | 'color' | null;
+type ActivePopoverType = 'add' | 'field' | 'view' | 'filter' | 'group' | 'sort' | 'density' | 'color' | null;
 
 export const BitableToolbar = <T,>({
   columns,
@@ -90,6 +96,8 @@ export const BitableToolbar = <T,>({
   onImport,
   onExport,
   selectedRecordCount = 0,
+  selectedRowId,
+  selectedRowIds,
   onUndo,
   onRedo,
   canUndo = false,
@@ -208,11 +216,22 @@ export const BitableToolbar = <T,>({
   const isDensityActive = activePopover === 'density';
   const isColorActive = colorRuleCount > 0 || activePopover === 'color';
 
+  const hasSelectedRow =
+    (selectedRowIds && selectedRowIds.length > 0) ||
+    Boolean(selectedRowId) ||
+    selectedRecordCount > 0;
+
+  const effectiveAnchorRowId =
+    selectedRowId ??
+    (selectedRowIds && selectedRowIds.length > 0
+      ? selectedRowIds[selectedRowIds.length - 1]
+      : null);
+
   // ===== 工具条按视图类型差异化（对齐飞书多维表）=====
   // 表格：全量工具；看板/画册/甘特：卡片/横道形态没有「行高」「填色」；
   // 日历：只在月历上排布，不需要分组；表单：纯录入页，只要字段/视图配置。
   const vt: BitableViewType = activeView.viewType || 'grid';
-  const showRecordActions = vt !== 'form'; // 添加记录 / 删除记录
+  const showRecordActions = vt !== 'form'; // 添加 / 删除
   const showFilter = vt !== 'form';
   const showGroup = vt === 'grid' || vt === 'kanban' || vt === 'gallery' || vt === 'gantt';
   const showSort = vt !== 'form';
@@ -223,6 +242,7 @@ export const BitableToolbar = <T,>({
   useEffect(() => {
     setActivePopover((prev) => {
       if (!prev) return prev;
+      if (prev === 'add' && !showRecordActions) return null;
       if (prev === 'density' && !showDensity) return null;
       if (prev === 'color' && !showColor) return null;
       if (prev === 'group' && !showGroup) return null;
@@ -241,20 +261,38 @@ export const BitableToolbar = <T,>({
     >
       {/* Left tool actions matching user's screenshot & Feishu Bitable standard */}
       <div className="flex items-center gap-x-1.5 gap-y-1.5 flex-wrap flex-1 min-w-0">
-        {/* + 添加记录 */}
+        {/* + 添加 */}
         {showRecordActions && (
-          <button
-            type="button"
-            onClick={onAddRecord}
-            className="h-7 px-2.5 flex items-center gap-1 rounded bg-[#005BAC] text-white hover:bg-[#004785] font-medium text-[12px] shadow-xs cursor-pointer transition-all active:scale-95 shrink-0"
-            title="在表格新增一行可编辑记录"
-          >
-            <span className="material-symbols-outlined text-[16px] leading-none">add</span>
-            <span className="tb-label-strong">添加记录</span>
-          </button>
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => togglePopover('add')}
+              className={`h-7 px-2.5 flex items-center gap-1 rounded font-medium text-[12px] shadow-xs cursor-pointer transition-all active:scale-95 shrink-0 ${
+                activePopover === 'add'
+                  ? 'bg-[#004785] text-white ring-2 ring-[#005BAC]/30'
+                  : 'bg-[#005BAC] text-white hover:bg-[#004785]'
+              }`}
+              title="添加新记录（点击可输入添加行数）"
+            >
+              <BitableIcon name="add" className="text-[16px] leading-none" />
+              <span className="tb-label-strong">添加</span>
+            </button>
+            {activePopover === 'add' && (
+              <BitableAddRecordPopover
+                hasSelectedRow={hasSelectedRow}
+                onConfirm={(count, position) => {
+                  const targetAnchor =
+                    position === 'below' && hasSelectedRow ? effectiveAnchorRowId : null;
+                  onAddRecord(count, targetAnchor);
+                  setActivePopover(null);
+                }}
+                onClose={() => setActivePopover(null)}
+              />
+            )}
+          </div>
         )}
 
-        {/* 🗑️ 删除记录 */}
+        {/* 🗑️ 删除 */}
         {showRecordActions && onDeleteRecord && (
           <button
             type="button"
@@ -267,15 +305,16 @@ export const BitableToolbar = <T,>({
             title={
               selectedRecordCount > 0
                 ? `点击批量删除已勾选的 ${selectedRecordCount} 条记录`
-                : '删除记录（请勾选表格左侧复选框，或悬停在行号上直接删除单行）'
+                : '删除（请勾选表格左侧复选框，或悬停在行号上直接删除单行）'
             }
           >
-            <span className={`material-symbols-outlined text-[15px] leading-none ${
-              selectedRecordCount > 0 ? 'text-rose-600' : 'text-slate-400'
-            }`}>
-              delete
-            </span>
-            <span className={labelCls}>删除记录</span>
+            <BitableIcon
+              name="delete"
+              className={`text-[15px] leading-none ${
+                selectedRecordCount > 0 ? 'text-rose-600' : 'text-slate-400'
+              }`}
+            />
+            <span className={labelCls}>删除</span>
             {selectedRecordCount > 0 && (
               <span className="text-[10px] px-1.5 py-0.2 bg-rose-200/80 text-rose-900 rounded font-bold">
                 {selectedRecordCount}
@@ -286,7 +325,7 @@ export const BitableToolbar = <T,>({
 
         <div className="h-4 w-px bg-slate-200 mx-0.5" />
 
-        {/* ⬆ 导入表格（Excel / CSV） */}
+        {/* ⬆ 导入（Excel / CSV） */}
         {onImport && (
           <button
             type="button"
@@ -294,10 +333,8 @@ export const BitableToolbar = <T,>({
             className="h-7 px-2 tb-tight flex items-center gap-1 rounded font-medium text-[12px] transition-all cursor-pointer border bg-white hover:bg-slate-50 text-slate-600 border-slate-200 shrink-0"
             title="上传 Excel / CSV，自动识别字段类型并导入为多维表"
           >
-            <span className="material-symbols-outlined text-[15px] leading-none text-slate-400">
-              upload_file
-            </span>
-            <span className={labelCls}>导入表格</span>
+            <BitableIcon name="upload_file" className="text-[15px] leading-none text-slate-400" />
+            <span className={labelCls}>导入</span>
           </button>
         )}
 
@@ -314,9 +351,7 @@ export const BitableToolbar = <T,>({
               }`}
               title="把当前视图（已筛选 / 排序 / 分组后的记录）导出为 Excel 或 CSV"
             >
-              <span className="material-symbols-outlined text-[15px] leading-none text-slate-400">
-                download
-              </span>
+              <BitableIcon name="download" className="text-[15px] leading-none text-slate-400" />
               <span className={labelCls}>导出</span>
             </button>
             {exportOpen && (
@@ -331,9 +366,7 @@ export const BitableToolbar = <T,>({
                     }}
                     className="w-full px-3 py-1.5 flex items-center gap-2 text-left text-slate-700 hover:bg-slate-50 cursor-pointer"
                   >
-                    <span className="material-symbols-outlined text-[15px] text-emerald-600">
-                      table_view
-                    </span>
+                    <BitableIcon name="table_view" className="text-[15px] text-emerald-600" />
                     <span className="flex-1">导出为 Excel</span>
                     <span className="text-[10px] text-slate-400 font-mono">.xlsx</span>
                   </button>
@@ -345,9 +378,7 @@ export const BitableToolbar = <T,>({
                     }}
                     className="w-full px-3 py-1.5 flex items-center gap-2 text-left text-slate-700 hover:bg-slate-50 cursor-pointer"
                   >
-                    <span className="material-symbols-outlined text-[15px] text-sky-600">
-                      description
-                    </span>
+                    <BitableIcon name="description" className="text-[15px] text-sky-600" />
                     <span className="flex-1">导出为 CSV</span>
                     <span className="text-[10px] text-slate-400 font-mono">.csv</span>
                   </button>
@@ -371,7 +402,7 @@ export const BitableToolbar = <T,>({
               }`}
               title={canUndo ? `撤销：${undoLabel}（Ctrl+Z）` : '没有可撤销的操作'}
             >
-              <span className="material-symbols-outlined text-[16px] leading-none">undo</span>
+              <BitableIcon name="undo" className="text-[16px] leading-none" />
             </button>
             {onRedo && (
               <button
@@ -385,32 +416,31 @@ export const BitableToolbar = <T,>({
                 }`}
                 title={canRedo ? `重做：${redoLabel}（Ctrl+Shift+Z）` : '没有可重做的操作'}
               >
-                <span className="material-symbols-outlined text-[16px] leading-none">redo</span>
+                <BitableIcon name="redo" className="text-[16px] leading-none" />
               </button>
             )}
           </div>
         )}
 
-        {/* ⚙ 字段配置 */}
+        {/* ⚙ 字段 */}
         <div className="relative">
           <button
             type="button"
             onClick={() => togglePopover('field')}
-            data-hint="字段配置"
+            data-hint="字段"
             className={`h-7 px-2 tb-tight flex items-center gap-1 rounded text-[12px] font-medium transition-colors cursor-pointer border ${
               isFieldActive
                 ? 'bg-blue-50 text-[#005BAC] border-blue-200 font-semibold'
                 : 'bg-white hover:bg-slate-50 text-slate-700 border-transparent hover:border-slate-200'
             }`}
           >
-            <span
-              className={`material-symbols-outlined text-[15px] ${
+            <BitableIcon
+              name="settings"
+              className={`text-[15px] ${
                 isFieldActive ? 'text-[#005BAC]' : 'text-slate-500'
               }`}
-            >
-              settings
-            </span>
-            <span className={labelCls}>字段配置</span>
+            />
+            <span className={labelCls}>字段</span>
             {visibleColumnCount < columns.length && (
               <span className="text-[10.5px] px-1 bg-blue-100 text-[#005BAC] rounded font-bold">
                 {visibleColumnCount}/{columns.length}
@@ -435,26 +465,25 @@ export const BitableToolbar = <T,>({
           )}
         </div>
 
-        {/* ◧ 视图配置 (飞书标准) */}
+        {/* ◧ 视图 (飞书标准) */}
         <div className="relative">
           <button
             type="button"
             onClick={() => togglePopover('view')}
-            data-hint="视图配置"
+            data-hint="视图"
             className={`h-7 px-2 tb-tight flex items-center gap-1 rounded text-[12px] font-medium transition-colors cursor-pointer border ${
               isViewActive
                 ? 'bg-blue-50 text-[#005BAC] border-blue-200 font-semibold'
                 : 'bg-white hover:bg-slate-50 text-slate-700 border-transparent hover:border-slate-200'
             }`}
           >
-            <span
-              className={`material-symbols-outlined text-[15px] ${
+            <BitableIcon
+              name="tune"
+              className={`text-[15px] ${
                 isViewActive ? 'text-[#005BAC]' : 'text-slate-500'
               }`}
-            >
-              tune
-            </span>
-            <span className={labelCls}>视图配置</span>
+            />
+            <span className={labelCls}>视图</span>
             {activeView.viewType && activeView.viewType !== 'grid' && (
               <span className="px-1.5 py-0.2 bg-blue-100/70 text-[#005BAC] rounded text-[10px] font-bold">
                 {activeView.viewType === 'kanban'
@@ -498,13 +527,12 @@ export const BitableToolbar = <T,>({
                 : 'bg-white hover:bg-slate-50 text-slate-700 border-transparent hover:border-slate-200'
             }`}
           >
-            <span
-              className={`material-symbols-outlined text-[15px] leading-none ${
+            <BitableIcon
+              name="filter_alt"
+              className={`text-[15px] leading-none ${
                 isFilterActive ? 'text-[#005BAC]' : 'text-slate-500'
               }`}
-            >
-              filter_alt
-            </span>
+            />
             {filterCount > 0 && (
               <span className="px-1.5 py-0.2 bg-[#005BAC] text-white text-[10.5px] rounded-full font-bold">
                 {filterCount}
@@ -538,13 +566,12 @@ export const BitableToolbar = <T,>({
                 : 'bg-white hover:bg-slate-50 text-slate-700 border-transparent hover:border-slate-200'
             }`}
           >
-            <span
-              className={`material-symbols-outlined text-[15px] leading-none ${
+            <BitableIcon
+              name="grid_view"
+              className={`text-[15px] leading-none ${
                 isGroupActive ? 'text-[#005BAC]' : 'text-slate-500'
               }`}
-            >
-              grid_view
-            </span>
+            />
             {groupCount > 0 && (
               <span className="px-1.5 py-0.2 bg-[#005BAC] text-white text-[10.5px] rounded-full font-bold">
                 {groupCount}
@@ -586,13 +613,12 @@ export const BitableToolbar = <T,>({
                 : 'bg-white hover:bg-slate-50 text-slate-700 border-transparent hover:border-slate-200'
             }`}
           >
-            <span
-              className={`material-symbols-outlined text-[15px] leading-none ${
+            <BitableIcon
+              name="swap_vert"
+              className={`text-[15px] leading-none ${
                 isSortActive ? 'text-[#005BAC]' : 'text-slate-500'
               }`}
-            >
-              swap_vert
-            </span>
+            />
             {sortCount > 0 && (
               <span className="px-1.5 py-0.2 bg-[#005BAC] text-white text-[10.5px] rounded-full font-bold">
                 {sortCount}
@@ -624,13 +650,12 @@ export const BitableToolbar = <T,>({
                 : 'bg-white hover:bg-slate-50 text-slate-700 border-transparent hover:border-slate-200'
             }`}
           >
-            <span
-              className={`material-symbols-outlined text-[15px] ${
+            <BitableIcon
+              name="height"
+              className={`text-[15px] ${
                 isDensityActive ? 'text-[#005BAC]' : 'text-slate-500'
               }`}
-            >
-              height
-            </span>
+            />
             <span className={labelCls}>行高</span>
           </button>
           {activePopover === 'density' && (
@@ -656,13 +681,12 @@ export const BitableToolbar = <T,>({
                 : 'bg-white hover:bg-slate-50 text-slate-700 border-transparent hover:border-slate-200'
             }`}
           >
-            <span
-              className={`material-symbols-outlined text-[15px] leading-none ${
+            <BitableIcon
+              name="palette"
+              className={`text-[15px] leading-none ${
                 isColorActive ? 'text-[#005BAC]' : 'text-slate-500'
               }`}
-            >
-              palette
-            </span>
+            />
             {colorRuleCount > 0 && (
               <span className="px-1.5 py-0.2 bg-[#005BAC] text-white text-[10.5px] rounded-full font-bold">
                 {colorRuleCount}
@@ -684,7 +708,7 @@ export const BitableToolbar = <T,>({
         {/* 视图状态徽标：锁定状态已由页签上的锁形图标表达，这里不再重复渲染「已锁定」 */}
         {activeView.scope === 'personal' && (
           <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 text-[10.5px] font-medium">
-            <span className="material-symbols-outlined text-[12px]">person</span>
+            <BitableIcon name="person" className="text-[12px]" />
             个人视图
           </span>
         )}
@@ -695,9 +719,7 @@ export const BitableToolbar = <T,>({
         {/* 🔍 多维表格通用搜索框 (Universal Search Box)；极窄档折叠为放大镜按钮；表单视图不提供搜索 */}
         {vt !== 'form' && (showSearchInput ? (
           <div className="relative flex items-center">
-            <span className="material-symbols-outlined text-[15px] text-slate-400 absolute left-2 pointer-events-none">
-              search
-            </span>
+            <BitableIcon name="search" className="text-[15px] text-slate-400 absolute left-2 pointer-events-none" />
             <input
               type="text"
               value={searchQuery || ''}
@@ -718,7 +740,7 @@ export const BitableToolbar = <T,>({
                 className="absolute right-1.5 text-slate-400 hover:text-slate-600 flex items-center justify-center p-0.5 rounded cursor-pointer"
                 title="清空搜索"
               >
-                <span className="material-symbols-outlined text-[13px]">close</span>
+                <BitableIcon name="close" className="text-[13px]" />
               </button>
             )}
           </div>
@@ -729,7 +751,7 @@ export const BitableToolbar = <T,>({
             data-hint="搜索台账数据"
             className="h-7 w-7 flex items-center justify-center rounded border border-slate-200 bg-slate-50/70 hover:bg-white text-slate-500 hover:text-[#005BAC] cursor-pointer transition-colors shadow-2xs"
           >
-            <span className="material-symbols-outlined text-[16px]">search</span>
+            <BitableIcon name="search" className="text-[16px]" />
           </button>
         ))}
 
@@ -741,9 +763,10 @@ export const BitableToolbar = <T,>({
             className="h-7 px-2 rounded border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 flex items-center gap-1 text-[11.5px] font-medium cursor-pointer transition-colors"
             title={isAllGroupsCollapsed ? '一键展开所有分组' : '一键折叠所有分组'}
           >
-            <span className="material-symbols-outlined text-[14px] text-slate-500">
-              {isAllGroupsCollapsed ? 'unfold_more' : 'unfold_less'}
-            </span>
+            <BitableIcon
+              name={isAllGroupsCollapsed ? 'unfold_more' : 'unfold_less'}
+              className="text-[14px] text-slate-500"
+            />
             <span className={labelCls}>{isAllGroupsCollapsed ? '全部展开' : '全部折叠'}</span>
           </button>
         )}

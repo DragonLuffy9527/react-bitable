@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { BitableColumnConfig } from './types';
+import { BitableColumnConfig, isSystemFieldType, type BitableLinkedTableAccessor } from './types';
+import { BitableIcon } from './BitableIcon';
+import { BitableLinkPopover } from './BitableLinkPopover';
+import { formatLinkedRecordDisplay, resolveLinkedRecordIds } from './relations';
 import {
   toValueList,
   firstValue,
@@ -10,7 +13,12 @@ import {
   displayUrl,
   initialsOf,
   isMultiValueType,
-  FALLBACK_OPTION_COLOR
+  FALLBACK_OPTION_COLOR,
+  parseCurrency,
+  formatCurrency,
+  parseProgress,
+  formatProgress,
+  parseRating
 } from './cellValue';
 
 export interface HighlightStyleInfo {
@@ -27,6 +35,7 @@ interface EditableCellProps<T> {
   value: any;
   highlightStyle?: HighlightStyleInfo | null;
   onUpdate: (newValue: any) => void;
+  getLinkedTableData?: BitableLinkedTableAccessor;
 }
 
 const DEFAULT_SELECT_OPTIONS = [
@@ -54,10 +63,14 @@ export const EditableCell = <T,>({
   row,
   value,
   highlightStyle,
-  onUpdate
+  onUpdate,
+  getLinkedTableData
 }: EditableCellProps<T>) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(value !== undefined && value !== null ? value : '');
+  /** 关联记录选择浮层状态 */
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkAnchorRect, setLinkAnchorRect] = useState<DOMRect | null>(null);
   /** 多值字段（多选/人员/群组）的文本输入草稿：「张伟、李强」 */
   const [listText, setListText] = useState(() => toValueList(value).join('、'));
   /** 多选浮层的屏幕坐标（fixed 定位，避免被 td 的 overflow-hidden 裁切） */
@@ -69,6 +82,8 @@ export const EditableCell = <T,>({
   const [filesPos, setFilesPos] = useState<{ left: number; top: number } | null>(null);
   const [filesDraft, setFilesDraft] = useState<BitableAttachmentFile[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  /** 评分列悬停预览 */
+  const [hoverRating, setHoverRating] = useState<number | null>(null);
 
   useEffect(() => {
     setEditValue(value !== undefined && value !== null ? value : '');
@@ -87,7 +102,11 @@ export const EditableCell = <T,>({
   }, [isEditing]);
 
   // If column has custom render and is not in edit mode
-  const isLocked = !!column.isLocked || !column.editable;
+  const isLocked =
+    !!column.isLocked ||
+    !column.editable ||
+    isSystemFieldType(column.type) ||
+    column.type === 'lookup';
 
   /**
    * 点击进入行内编辑。
@@ -166,9 +185,10 @@ export const EditableCell = <T,>({
         >
           {rendered}
         </div>
-        <span className="material-symbols-outlined text-[12px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-          edit
-        </span>
+        <BitableIcon
+          name="edit"
+          className="text-[12px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+        />
       </div>
     );
   }
@@ -186,9 +206,10 @@ export const EditableCell = <T,>({
                 : 'text-slate-400 bg-slate-50 border-slate-200'
             }`}
           >
-            <span className="material-symbols-outlined text-[13px] leading-none">
-              {isChecked ? 'check_box' : 'check_box_outline_blank'}
-            </span>
+            <BitableIcon
+              name={isChecked ? 'check_box' : 'check_box_outline_blank'}
+              className="text-[13px] leading-none"
+            />
             <span>{isChecked ? '是' : '否'}</span>
           </span>
         </div>
@@ -212,6 +233,108 @@ export const EditableCell = <T,>({
             {isChecked ? '是' : '否'}
           </span>
         </label>
+      </div>
+    );
+  }
+
+  // 关联记录列（同时处理锁定只读与可编辑弹层）
+  if (column.type === 'link') {
+    const linkedIds = resolveLinkedRecordIds(value);
+    const targetTableId = column.linkConfig?.targetTableId || '';
+    const targetTable = getLinkedTableData && targetTableId ? getLinkedTableData(targetTableId) : undefined;
+    const targetRows = targetTable?.data || [];
+    const targetColumns = targetTable?.columns || [];
+    const targetFieldId = column.linkConfig?.targetFieldId;
+    const multiple = column.linkConfig?.multiple !== false;
+
+    const openLinkPopover = (e: React.MouseEvent<HTMLElement>) => {
+      e.stopPropagation();
+      if (isLocked) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      setLinkAnchorRect(rect);
+      setLinkOpen(true);
+    };
+
+    const removeId = (e: React.MouseEvent, idToRemove: string) => {
+      e.stopPropagation();
+      const next = linkedIds.filter((id) => id !== idToRemove);
+      onUpdate(multiple ? next : (next[0] ?? ''));
+    };
+
+    return (
+      <div
+        onClick={openLinkPopover}
+        className={`group flex items-center gap-1 w-full h-full min-w-0 -mx-1 px-1 rounded transition-colors ${
+          !isLocked ? 'cursor-pointer hover:bg-slate-100/60' : ''
+        }`}
+        title={!isLocked ? '点击修改关联记录' : '关联记录（只读）'}
+      >
+        {linkedIds.length === 0 ? (
+          !isLocked ? (
+            <span className="inline-flex items-center gap-1 text-[11px] text-slate-400 group-hover:text-indigo-600 transition-colors">
+              <BitableIcon name="add" className="text-[12px]" />
+              <span>关联记录</span>
+            </span>
+          ) : (
+            <span className="text-[12px] text-slate-300">-</span>
+          )
+        ) : (
+          <div className="flex items-center gap-1 min-w-0 overflow-hidden">
+            {linkedIds.slice(0, 3).map((id) => {
+              const matchedRow = targetRows.find((r) => String(r.id) === id);
+              const label = matchedRow
+                ? formatLinkedRecordDisplay(matchedRow, targetColumns, targetFieldId)
+                : id;
+
+              return (
+                <span
+                  key={id}
+                  className="inline-flex items-center gap-1 h-5 pl-1.5 pr-1 rounded-full bg-indigo-50 border border-indigo-200 text-[10.5px] font-medium text-indigo-800 max-w-[110px] shrink-0"
+                  title={label}
+                >
+                  <BitableIcon name="link" className="text-[10px] text-indigo-500 shrink-0" />
+                  <span className="truncate">{label}</span>
+                  {!isLocked && (
+                    <button
+                      type="button"
+                      onClick={(e) => removeId(e, id)}
+                      className="text-indigo-400 hover:text-indigo-700 hover:bg-indigo-200/50 rounded-full p-0.5 shrink-0 cursor-pointer"
+                      title="取消关联"
+                    >
+                      <BitableIcon name="close" className="text-[10px]" />
+                    </button>
+                  )}
+                </span>
+              );
+            })}
+            {linkedIds.length > 3 && (
+              <span className="text-[10px] font-semibold text-slate-400 shrink-0" title={`共关联 ${linkedIds.length} 项`}>
+                +{linkedIds.length - 3}
+              </span>
+            )}
+            {!isLocked && multiple && (
+              <span className="text-slate-300 group-hover:text-indigo-600 text-[12px] shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                <BitableIcon name="add" />
+              </span>
+            )}
+          </div>
+        )}
+
+        {linkOpen && (
+          <BitableLinkPopover
+            open={linkOpen}
+            onClose={() => setLinkOpen(false)}
+            targetTableId={targetTableId}
+            targetFieldId={targetFieldId}
+            multiple={multiple}
+            selectedIds={linkedIds}
+            onCommit={(nextIds) => {
+              onUpdate(multiple ? nextIds : (nextIds[0] ?? ''));
+            }}
+            getLinkedTableData={getLinkedTableData}
+            anchorRect={linkAnchorRect}
+          />
+        )}
       </div>
     );
   }
@@ -282,7 +405,7 @@ export const EditableCell = <T,>({
             className="inline-flex items-center gap-0.5 h-5 px-1.5 rounded bg-orange-50 border border-orange-200 text-[10.5px] font-medium text-orange-800 max-w-[92px] shrink-0"
             title={name}
           >
-            <span className="material-symbols-outlined text-[11px] leading-none shrink-0">groups</span>
+            <BitableIcon name="groups" className="text-[11px] leading-none shrink-0" />
             <span className="truncate">{name}</span>
           </span>
         ))}
@@ -305,13 +428,83 @@ export const EditableCell = <T,>({
       className="inline-flex items-center gap-1 min-w-0 max-w-full text-[12px] text-[#005BAC] hover:underline"
       title={String(value)}
     >
-      <span className="material-symbols-outlined text-[12px] leading-none shrink-0">link</span>
+      <BitableIcon name="link" className="text-[12px] leading-none shrink-0" />
       <span className="truncate">{displayUrl(String(value))}</span>
     </a>
   );
 
   // Not editable / locked column
   if (isLocked) {
+    if (column.type === 'createdTime' || column.type === 'updatedTime') {
+      const isCreate = column.type === 'createdTime';
+      return (
+        <span
+          className="inline-flex items-center gap-1 text-[11.5px] font-mono text-slate-600 truncate"
+          title={String(value || '')}
+        >
+          <BitableIcon
+            name={isCreate ? 'schedule' : 'update'}
+            className={`text-[12px] shrink-0 ${isCreate ? 'text-indigo-500' : 'text-blue-500'}`}
+          />
+          <span className="truncate">{value || '-'}</span>
+        </span>
+      );
+    }
+
+    if (column.type === 'createdBy' || column.type === 'updatedBy') {
+      const name = String(value || '').trim();
+      if (!name || name === '-') return <span className="text-[12px] text-slate-300">-</span>;
+      const isCreate = column.type === 'createdBy';
+      return (
+        <span
+          className={`inline-flex items-center gap-1 h-5 pl-0.5 pr-1.5 rounded-full border text-[10.5px] font-medium max-w-full shrink-0 ${
+            isCreate
+              ? 'bg-indigo-50/70 border-indigo-200 text-indigo-800'
+              : 'bg-cyan-50/70 border-cyan-200 text-cyan-800'
+          }`}
+          title={name}
+        >
+          <span
+            className={`w-4 h-4 rounded-full text-white text-[8px] font-bold flex items-center justify-center shrink-0 ${
+              isCreate ? 'bg-indigo-600' : 'bg-cyan-600'
+            }`}
+          >
+            {initialsOf(name)}
+          </span>
+          <span className="truncate">{name}</span>
+        </span>
+      );
+    }
+
+    if (column.type === 'autoNumber') {
+      return (
+        <span
+          className="inline-flex items-center gap-1 font-mono text-[11.5px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200/80 truncate"
+          title={String(value || '')}
+        >
+          <BitableIcon name="tag" className="text-[11px] text-amber-600 shrink-0" />
+          <span className="truncate">{value || '-'}</span>
+        </span>
+      );
+    }
+
+    if (column.type === 'lookup') {
+      const displayVal = Array.isArray(value)
+        ? value.join('、')
+        : value !== undefined && value !== null && value !== ''
+        ? String(value)
+        : '-';
+      return (
+        <span
+          className="inline-flex items-center gap-1 text-[11.5px] text-sky-800 bg-sky-50/70 border border-sky-200/80 rounded px-1.5 py-0.5 truncate max-w-full font-medium"
+          title={`查找引用：${displayVal}`}
+        >
+          <BitableIcon name="search" className="text-[11px] text-sky-500 shrink-0" />
+          <span className="truncate">{displayVal}</span>
+        </span>
+      );
+    }
+
     if (column.type === 'badge' && value) {
       return (
         <span
@@ -348,6 +541,85 @@ export const EditableCell = <T,>({
       return <div className="min-w-0 max-w-full">{renderLink()}</div>;
     }
 
+    if (column.type === 'rating') {
+      const max = column.maxRating || 5;
+      const rating = parseRating(value, max);
+      return (
+        <div className="flex items-center gap-0.5" title={`评分：${rating} / ${max}`}>
+          {Array.from({ length: max }, (_, i) => {
+            const filled = i < rating;
+            return (
+              <BitableIcon
+                key={i}
+                name={filled ? 'star' : 'star_border'}
+                className={`text-[15px] leading-none ${filled ? 'text-amber-400' : 'text-slate-200'}`}
+              />
+            );
+          })}
+        </div>
+      );
+    }
+
+    if (column.type === 'progress') {
+      const p = parseProgress(value);
+      if (p === null) return <span className="text-[12px] text-slate-300">-</span>;
+      const barColor = p >= 80 ? 'bg-emerald-500' : p >= 30 ? 'bg-blue-500' : 'bg-amber-500';
+      return (
+        <div className="flex items-center gap-1.5 w-full max-w-[150px]" title={`进度：${p}%`}>
+          <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200/60">
+            <div
+              className={`h-full rounded-full transition-all duration-200 ${barColor}`}
+              style={{ width: `${p}%` }}
+            />
+          </div>
+          <span className="text-[11px] font-mono text-slate-600 shrink-0 w-8 text-right font-medium">
+            {p}%
+          </span>
+        </div>
+      );
+    }
+
+    if (column.type === 'currency') {
+      const formatted = formatCurrency(value, column.currencySymbol || '¥');
+      return (
+        <span
+          className={`font-mono text-[12px] truncate ${highlightStyle ? 'font-bold' : 'text-slate-800'}`}
+          style={highlightStyle?.textColor ? { color: highlightStyle.textColor } : undefined}
+          title={formatted}
+        >
+          {formatted || '-'}
+        </span>
+      );
+    }
+
+    if (column.type === 'email' && value) {
+      return (
+        <a
+          href={`mailto:${String(value).trim()}`}
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center gap-1 min-w-0 max-w-full text-[12px] text-[#005BAC] hover:underline"
+          title={String(value)}
+        >
+          <BitableIcon name="mail" className="text-[12px] leading-none shrink-0" />
+          <span className="truncate">{String(value)}</span>
+        </a>
+      );
+    }
+
+    if (column.type === 'phone' && value) {
+      return (
+        <a
+          href={`tel:${String(value).trim()}`}
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center gap-1 min-w-0 max-w-full text-[12px] text-teal-700 hover:underline"
+          title={String(value)}
+        >
+          <BitableIcon name="phone" className="text-[12px] leading-none shrink-0" />
+          <span className="truncate">{String(value)}</span>
+        </a>
+      );
+    }
+
     // 附件类型默认渲染：无自定义 render 时显示附件数量徽章（文件名列表见 title）
     if (column.type === 'attachment') {
       const files = Array.isArray(value)
@@ -361,7 +633,7 @@ export const EditableCell = <T,>({
           className="inline-flex items-center gap-1 max-w-full text-[11px] text-slate-700"
           title={files.map((f) => `${f.name || ''}${f.size ? ` (${f.size})` : ''}`).join('、')}
         >
-          <span className="material-symbols-outlined text-[13px] text-[#005BAC] shrink-0">attach_file</span>
+          <BitableIcon name="attach_file" className="text-[13px] text-[#005BAC] shrink-0" />
           <span className="truncate min-w-0 flex-1">{files[0]?.name || `${files.length} 个附件`}</span>
           {files.length > 1 && (
             <span className="shrink-0 text-[10px] px-1 rounded bg-slate-100 text-slate-600 border border-slate-200 leading-4">
@@ -428,7 +700,7 @@ export const EditableCell = <T,>({
               onClick={() => fileInputRef.current?.click()}
               className="w-full h-8 rounded border border-dashed border-[#005BAC]/40 bg-[#005BAC]/5 hover:bg-[#005BAC]/10 flex items-center justify-center gap-1 text-[11px] font-medium text-[#005BAC] cursor-pointer transition-colors"
             >
-              <span className="material-symbols-outlined text-[14px] leading-none">upload</span>
+              <BitableIcon name="upload" className="text-[14px] leading-none" />
               上传附件（可多选）
             </button>
             <div className="mt-1 max-h-44 overflow-y-auto pr-0.5">
@@ -440,9 +712,10 @@ export const EditableCell = <T,>({
                     key={`${f.name}-${i}`}
                     className="h-7 px-1.5 rounded flex items-center gap-1.5 hover:bg-slate-50"
                   >
-                    <span className="material-symbols-outlined text-[13px] text-[#005BAC] shrink-0 leading-none">
-                      attach_file
-                    </span>
+                    <BitableIcon
+                      name="attach_file"
+                      className="text-[13px] text-[#005BAC] shrink-0 leading-none"
+                    />
                     <span
                       className="truncate min-w-0 flex-1 text-[10.5px] text-slate-700"
                       title={f.name}
@@ -455,10 +728,10 @@ export const EditableCell = <T,>({
                     <button
                       type="button"
                       onClick={() => setFilesDraft((prev) => prev.filter((_, idx) => idx !== i))}
-                      className="material-symbols-outlined text-[13px] text-slate-300 hover:text-red-500 shrink-0 cursor-pointer transition-colors"
+                      className="text-slate-300 hover:text-red-500 shrink-0 cursor-pointer transition-colors p-0.5 flex items-center justify-center"
                       title="移除该附件"
                     >
-                      close
+                      <BitableIcon name="close" className="text-[13px]" />
                     </button>
                   </div>
                 ))
@@ -504,9 +777,10 @@ export const EditableCell = <T,>({
           <span className="text-[11px] italic text-slate-300">无附件 (点击上传)</span>
         ) : (
           <>
-            <span className="material-symbols-outlined text-[13px] text-[#005BAC] shrink-0 leading-none">
-              attach_file
-            </span>
+            <BitableIcon
+              name="attach_file"
+              className="text-[13px] text-[#005BAC] shrink-0 leading-none"
+            />
             <span className="truncate min-w-0 flex-1 text-[11px] text-slate-700">
               {files[0]?.name || `${files.length} 个附件`}
             </span>
@@ -517,9 +791,10 @@ export const EditableCell = <T,>({
             )}
           </>
         )}
-        <span className="material-symbols-outlined text-[13px] text-slate-300 group-hover:text-[#005BAC] opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-          upload
-        </span>
+        <BitableIcon
+          name="upload"
+          className="text-[13px] text-slate-300 group-hover:text-[#005BAC] opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+        />
       </div>
     );
   }
@@ -593,9 +868,10 @@ export const EditableCell = <T,>({
         >
           {currentOpt ? currentOpt.label : currentValue || '请选择'}
         </span>
-        <span className="material-symbols-outlined text-[13px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity">
-          arrow_drop_down
-        </span>
+        <BitableIcon
+          name="arrow_drop_down"
+          className="text-[13px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity"
+        />
       </div>
     );
   }
@@ -628,9 +904,10 @@ export const EditableCell = <T,>({
         >
           {value || '-'}
         </span>
-        <span className="material-symbols-outlined text-[13px] text-slate-400 opacity-0 group-hover:opacity-100">
-          calendar_today
-        </span>
+        <BitableIcon
+          name="calendar_today"
+          className="text-[13px] text-slate-400 opacity-0 group-hover:opacity-100"
+        />
       </div>
     );
   }
@@ -668,9 +945,10 @@ export const EditableCell = <T,>({
             <span className="text-slate-300 italic font-sans text-[11px]">空 (录入数值)</span>
           )}
         </span>
-        <span className="material-symbols-outlined text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">
-          edit
-        </span>
+        <BitableIcon
+          name="edit"
+          className="text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity"
+        />
       </div>
     );
   }
@@ -714,9 +992,10 @@ export const EditableCell = <T,>({
         ) : (
           <span className="text-slate-300 italic text-[11px]">未标记 (点击添加)</span>
         )}
-        <span className="material-symbols-outlined text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">
-          edit
-        </span>
+        <BitableIcon
+          name="edit"
+          className="text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity"
+        />
       </div>
     );
   }
@@ -767,9 +1046,10 @@ export const EditableCell = <T,>({
           ) : (
             <span className="text-[11px] italic text-slate-300">未选择 (点击添加)</span>
           )}
-          <span className="material-symbols-outlined text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-            expand_more
-          </span>
+          <BitableIcon
+            name="expand_more"
+            className="text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+          />
         </div>
 
         {isEditing &&
@@ -795,13 +1075,12 @@ export const EditableCell = <T,>({
                         onClick={() => toggleOption(o.value)}
                         className="w-full h-7 px-1.5 rounded flex items-center gap-1.5 hover:bg-slate-100 text-left cursor-pointer"
                       >
-                        <span
-                          className={`material-symbols-outlined text-[15px] leading-none shrink-0 ${
+                        <BitableIcon
+                          name={checked ? 'check_box' : 'check_box_outline_blank'}
+                          className={`text-[15px] leading-none shrink-0 ${
                             checked ? 'text-[#005BAC]' : 'text-slate-300'
                           }`}
-                        >
-                          {checked ? 'check_box' : 'check_box_outline_blank'}
-                        </span>
+                        />
                         <span
                           className={`px-1.5 py-0.5 rounded text-[10.5px] font-medium border truncate ${
                             o.color || FALLBACK_OPTION_COLOR
@@ -887,9 +1166,10 @@ export const EditableCell = <T,>({
             {isUser ? '未指派 (点击添加)' : '未关联 (点击添加)'}
           </span>
         )}
-        <span className="material-symbols-outlined text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-          edit
-        </span>
+        <BitableIcon
+          name="edit"
+          className="text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+        />
       </div>
     );
   }
@@ -919,9 +1199,10 @@ export const EditableCell = <T,>({
           title="点击录入链接"
         >
           <span className="text-[11px] italic text-slate-300">空 (点击录入链接)</span>
-          <span className="material-symbols-outlined text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">
-            edit
-          </span>
+          <BitableIcon
+            name="edit"
+            className="text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity"
+          />
         </div>
       );
     }
@@ -935,10 +1216,298 @@ export const EditableCell = <T,>({
             e.stopPropagation();
             setIsEditing(true);
           }}
-          className="material-symbols-outlined text-[13px] text-slate-300 hover:text-[#005BAC] opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer"
+          className="text-slate-300 hover:text-[#005BAC] opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer p-0.5 flex items-center justify-center"
           title="修改链接"
         >
-          edit
+          <BitableIcon name="edit" className="text-[13px]" />
+        </button>
+      </div>
+    );
+  }
+
+  // 10. Rating Editor (Clickable 1-5 Star interactive rating)
+  if (column.type === 'rating') {
+    const max = column.maxRating || 5;
+    const currentRating = parseRating(value, max);
+    const displayRating = hoverRating !== null ? hoverRating : currentRating;
+
+    return (
+      <div
+        className="flex items-center gap-0.5 py-0.5 select-none"
+        onMouseLeave={() => setHoverRating(null)}
+        title={`评分：${currentRating} / ${max}（点击星级直接评分）`}
+      >
+        {Array.from({ length: max }, (_, i) => {
+          const starIndex = i + 1;
+          const filled = starIndex <= displayRating;
+          return (
+            <button
+              key={starIndex}
+              type="button"
+              onMouseEnter={() => setHoverRating(starIndex)}
+              onClick={(e) => {
+                e.stopPropagation();
+                const next = currentRating === starIndex ? 0 : starIndex;
+                onUpdate(next);
+              }}
+              className="p-0.5 hover:scale-110 transition-transform cursor-pointer focus:outline-none"
+              title={`打 ${starIndex} 星${currentRating === starIndex ? ' (点击取消)' : ''}`}
+            >
+              <BitableIcon
+                name={filled ? 'star' : 'star_border'}
+                className={`text-[16px] leading-none ${filled ? 'text-amber-400' : 'text-slate-200 hover:text-amber-200'}`}
+              />
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // 11. Progress Editor (Capsule progress bar + inline edit)
+  if (column.type === 'progress') {
+    if (isEditing) {
+      return (
+        <div className="flex items-center gap-1 w-full h-7 bg-white border border-[#005BAC] rounded shadow-xs px-1.5">
+          <input
+            ref={inputRef}
+            type="number"
+            min="0"
+            max="100"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onBlur={() => {
+              setIsEditing(false);
+              const p = parseProgress(editValue);
+              if (p !== parseProgress(value)) onUpdate(p);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                setIsEditing(false);
+                const p = parseProgress(editValue);
+                if (p !== parseProgress(value)) onUpdate(p);
+              } else if (e.key === 'Escape') {
+                setIsEditing(false);
+                setEditValue(value !== undefined && value !== null ? value : '');
+              }
+            }}
+            className="w-full text-[11.5px] font-mono focus:outline-none"
+            placeholder="0"
+          />
+          <span className="text-[11px] text-slate-400 font-mono">%</span>
+        </div>
+      );
+    }
+
+    const p = parseProgress(value);
+    const barColor = (p ?? 0) >= 80 ? 'bg-emerald-500' : (p ?? 0) >= 30 ? 'bg-blue-500' : 'bg-amber-500';
+
+    return (
+      <div
+        onClick={beginEdit}
+        className="cursor-pointer group flex items-center justify-between gap-1.5 w-full h-full py-0.5 rounded hover:bg-slate-100/60 px-1 -mx-1"
+        title="点击录入进度 (0-100%)"
+      >
+        {p !== null ? (
+          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+            <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200/60">
+              <div
+                className={`h-full rounded-full transition-all duration-200 ${barColor}`}
+                style={{ width: `${p}%` }}
+              />
+            </div>
+            <span className="text-[11px] font-mono text-slate-600 shrink-0 w-8 text-right font-medium">
+              {p}%
+            </span>
+          </div>
+        ) : (
+          <span className="text-slate-300 italic text-[11px]">空 (录入进度)</span>
+        )}
+        <BitableIcon
+          name="edit"
+          className="text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+        />
+      </div>
+    );
+  }
+
+  // 12. Currency Editor (Symbol prefix + thousand separator)
+  if (column.type === 'currency') {
+    const symbol = column.currencySymbol || '¥';
+
+    if (isEditing) {
+      return (
+        <div className="flex items-center gap-1 w-full h-7 bg-white border border-[#005BAC] rounded shadow-xs px-1.5">
+          <span className="text-[11.5px] text-slate-400 font-mono select-none">
+            {symbol}
+          </span>
+          <input
+            ref={inputRef}
+            type="number"
+            step="0.01"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onBlur={() => {
+              setIsEditing(false);
+              const n = parseCurrency(editValue);
+              if (n !== parseCurrency(value)) onUpdate(n);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                setIsEditing(false);
+                const n = parseCurrency(editValue);
+                if (n !== parseCurrency(value)) onUpdate(n);
+              } else if (e.key === 'Escape') {
+                setIsEditing(false);
+                setEditValue(value !== undefined && value !== null ? value : '');
+              }
+            }}
+            className="w-full text-[11.5px] font-mono focus:outline-none"
+            placeholder="0.00"
+          />
+        </div>
+      );
+    }
+
+    const formatted = formatCurrency(value, symbol);
+
+    return (
+      <div
+        onClick={beginEdit}
+        className="cursor-pointer group flex items-center justify-between w-full h-full py-0.5 rounded hover:bg-slate-100/60 px-1 -mx-1"
+        title="点击录入金额"
+      >
+        <span
+          className={`font-mono text-[12px] truncate ${highlightStyle ? 'font-bold' : 'text-slate-800'}`}
+          style={highlightStyle?.textColor ? { color: highlightStyle.textColor } : undefined}
+        >
+          {formatted ? (
+            formatted
+          ) : (
+            <span className="text-slate-300 italic font-sans text-[11px]">空 (录入金额)</span>
+          )}
+        </span>
+        <BitableIcon
+          name="edit"
+          className="text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+        />
+      </div>
+    );
+  }
+
+  // 13. Email Editor
+  if (column.type === 'email') {
+    if (isEditing) {
+      return (
+        <input
+          ref={inputRef}
+          type="email"
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          onBlur={handleSave}
+          onKeyDown={handleKeyDown}
+          placeholder="user@example.com"
+          className="w-full h-7 px-1.5 text-[11.5px] bg-white border border-[#005BAC] rounded shadow-xs focus:outline-none"
+        />
+      );
+    }
+
+    if (!value) {
+      return (
+        <div
+          onClick={beginEdit}
+          className="cursor-pointer group flex items-center justify-between w-full h-full py-0.5"
+          title="点击录入邮箱"
+        >
+          <span className="text-[11px] italic text-slate-300">空 (点击录入邮箱)</span>
+          <BitableIcon
+            name="edit"
+            className="text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity"
+          />
+        </div>
+      );
+    }
+
+    return (
+      <div className="group flex items-center justify-between gap-1 w-full h-full py-0.5">
+        <a
+          href={`mailto:${String(value).trim()}`}
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center gap-1 min-w-0 max-w-full text-[12px] text-[#005BAC] hover:underline"
+          title={`发送邮件至 ${value}`}
+        >
+          <BitableIcon name="mail" className="text-[12px] leading-none shrink-0" />
+          <span className="truncate">{String(value)}</span>
+        </a>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsEditing(true);
+          }}
+          className="text-slate-300 hover:text-[#005BAC] opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer p-0.5 flex items-center justify-center"
+          title="修改邮箱"
+        >
+          <BitableIcon name="edit" className="text-[13px]" />
+        </button>
+      </div>
+    );
+  }
+
+  // 14. Phone Editor
+  if (column.type === 'phone') {
+    if (isEditing) {
+      return (
+        <input
+          ref={inputRef}
+          type="tel"
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          onBlur={handleSave}
+          onKeyDown={handleKeyDown}
+          placeholder="13800138000"
+          className="w-full h-7 px-1.5 text-[11.5px] bg-white border border-[#005BAC] rounded shadow-xs focus:outline-none"
+        />
+      );
+    }
+
+    if (!value) {
+      return (
+        <div
+          onClick={beginEdit}
+          className="cursor-pointer group flex items-center justify-between w-full h-full py-0.5"
+          title="点击录入电话"
+        >
+          <span className="text-[11px] italic text-slate-300">空 (点击录入电话)</span>
+          <BitableIcon
+            name="edit"
+            className="text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity"
+          />
+        </div>
+      );
+    }
+
+    return (
+      <div className="group flex items-center justify-between gap-1 w-full h-full py-0.5">
+        <a
+          href={`tel:${String(value).trim()}`}
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center gap-1 min-w-0 max-w-full text-[12px] text-teal-700 hover:underline"
+          title={`拨打电话 ${value}`}
+        >
+          <BitableIcon name="phone" className="text-[12px] leading-none shrink-0" />
+          <span className="truncate">{String(value)}</span>
+        </a>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsEditing(true);
+          }}
+          className="text-slate-300 hover:text-teal-700 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer p-0.5 flex items-center justify-center"
+          title="修改电话"
+        >
+          <BitableIcon name="edit" className="text-[13px]" />
         </button>
       </div>
     );
@@ -974,9 +1543,10 @@ export const EditableCell = <T,>({
           <span className="text-slate-300 italic">空 (点击录入)</span>
         )}
       </span>
-      <span className="material-symbols-outlined text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">
-        edit
-      </span>
+      <BitableIcon
+        name="edit"
+        className="text-[13px] text-slate-300 group-hover:text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity"
+      />
     </div>
   );
 };

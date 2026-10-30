@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BitableColumnConfig, BitableFieldType } from './types';
+import { BitableIcon } from './BitableIcon';
 import {
   buildImportResult,
   parseSpreadsheetFile,
@@ -180,7 +181,7 @@ export function BitableImportDialog<T = any>({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 shrink-0">
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-[19px] text-[#005BAC]">upload_file</span>
+            <BitableIcon name="upload_file" className="text-[19px] text-[#005BAC]" />
             <div>
               <div className="text-[13.5px] font-semibold text-slate-900">导入 Excel / CSV</div>
               <div className="text-[11px] text-slate-500 mt-0.5">
@@ -194,7 +195,7 @@ export function BitableImportDialog<T = any>({
             className="w-7 h-7 flex items-center justify-center rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700 cursor-pointer"
             title="关闭"
           >
-            <span className="material-symbols-outlined text-[18px]">close</span>
+            <BitableIcon name="close" className="text-[18px]" />
           </button>
         </div>
 
@@ -221,9 +222,10 @@ export function BitableImportDialog<T = any>({
                     : 'border-slate-300 bg-slate-50/60 hover:border-[#005BAC]/60 hover:bg-blue-50/30'
                 }`}
               >
-                <span className="material-symbols-outlined text-[40px] text-slate-400">
-                  {loading ? 'hourglass_top' : 'cloud_upload'}
-                </span>
+                <BitableIcon
+                  name={loading ? 'hourglass_top' : 'cloud_upload'}
+                  className="text-[40px] text-slate-400"
+                />
                 <div className="text-center">
                   <div className="text-[13px] font-medium text-slate-800">
                     {loading ? '正在解析…' : '把文件拖到这里，或点击选择'}
@@ -251,7 +253,7 @@ export function BitableImportDialog<T = any>({
 
               {error && (
                 <div className="mt-4 flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-[11.5px] text-rose-700">
-                  <span className="material-symbols-outlined text-[16px] leading-none mt-0.5">error</span>
+                  <BitableIcon name="error" className="text-[16px] leading-none mt-0.5 shrink-0" />
                   <span>{error}</span>
                 </div>
               )}
@@ -263,7 +265,7 @@ export function BitableImportDialog<T = any>({
               {/* 文件信息 + 重新选择 */}
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="material-symbols-outlined text-[17px] text-emerald-600">description</span>
+                  <BitableIcon name="description" className="text-[17px] text-emerald-600 shrink-0" />
                   <span className="font-medium text-slate-800 truncate max-w-[420px]" title={fileInfo?.name}>
                     {fileInfo?.name}
                   </span>
@@ -360,7 +362,7 @@ export function BitableImportDialog<T = any>({
 
               {mode === 'replace' && (
                 <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-800">
-                  <span className="material-symbols-outlined text-[16px] leading-none mt-0.5">warning</span>
+                  <BitableIcon name="warning" className="text-[16px] leading-none mt-0.5 shrink-0" />
                   <span>替换会清空当前表的记录与字段，原有筛选/排序/分组条件也会重置。可用 Ctrl+Z 撤销。</span>
                 </div>
               )}
@@ -463,7 +465,7 @@ export function BitableImportDialog<T = any>({
 
               {error && (
                 <div className="flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-[11.5px] text-rose-700">
-                  <span className="material-symbols-outlined text-[16px] leading-none mt-0.5">error</span>
+                  <BitableIcon name="error" className="text-[16px] leading-none mt-0.5 shrink-0" />
                   <span>{error}</span>
                 </div>
               )}

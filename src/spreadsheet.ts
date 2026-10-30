@@ -683,6 +683,12 @@ export function inferColumnType(values: string[], sampleLimit = 500): InferredFi
   const dateRatio = ratio((v) => normalizeDateText(v) !== null);
   if (dateRatio >= 0.95) return { type: 'date', confidence: dateRatio };
 
+  const emailRatio = ratio((v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v));
+  if (emailRatio >= 0.95) return { type: 'email', confidence: emailRatio };
+
+  const phoneRatio = ratio((v) => /^(\+?86[- ]?)?1[3-9]\d{9}$/.test(v));
+  if (phoneRatio >= 0.95) return { type: 'phone', confidence: phoneRatio };
+
   const urlRatio = ratio(isUrlText);
   if (urlRatio >= 0.95) return { type: 'url', confidence: urlRatio };
 
@@ -792,11 +798,25 @@ function guessWidth(values: string[], label: string): string {
 function coerceValue(type: BitableFieldType, raw: string): unknown {
   const s = String(raw ?? '').trim();
   switch (type) {
-    case 'number': {
+    case 'number':
+    case 'currency': {
       if (!s) return null;
       const n = parseNumberText(s);
       return n === null ? null : n;
     }
+    case 'progress': {
+      if (!s) return null;
+      const n = parseNumberText(s);
+      return n === null ? null : Math.min(100, Math.max(0, n));
+    }
+    case 'rating': {
+      if (!s) return null;
+      const n = parseNumberText(s);
+      return n === null ? null : Math.min(5, Math.max(0, Math.round(n)));
+    }
+    case 'email':
+    case 'phone':
+      return s;
     case 'boolean': {
       if (!s) return null;
       return parseBooleanText(s);
